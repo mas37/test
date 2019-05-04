@@ -1,0 +1,23 @@
+(To be continued)
+--
+SISSA & CNR support:
+Stefano de Gironcoli
+Layla Martin-Samos
+--
+MIT-FVG support:
+Alexie Kolpak
+Asegun Henry
+Spencer Wyant
+--
+HARVARD support:
+Efthimios Kaxiras
+--
+ANI-1 dataset permission:
+Olexandr Isayev
+--
+Testing & feedback:
+Duc-Long Nguyen, Academia Sinica, Taiwan
+Ivor Loncaric, Rudjer Boskovic Institute, Croatia
+Yun Wang, Griffith University, Australia
+
+
