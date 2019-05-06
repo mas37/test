@@ -270,7 +270,7 @@ def main(parameters):
         if validation_parameters.compute_forces:
             f_writers = [
                 open(
-                    os.path.join(parameters.eval_dir,
+                    os.path.join(io_parameters.eval_dir,
                                  '{}_forces.dat'.format(x)), 'w')
                 for x in ck_steps
             ]
@@ -305,7 +305,7 @@ def main(parameters):
     [x.write('#filename n_atoms e_dft e_nn\n') for x in writers]
 
     if validation_parameters.compute_forces:
-        [x.write('#filename atom_id fx_ref fx_nn, fy_ref, fy_nn fz_ref, fz_nn\n') for x in f_writers]
+        [x.write('#filename atom_id fx_ref fx_nn fy_ref fy_nn fz_ref fz_nn\n') for x in f_writers]
 
     examples = []
     pool = mp.Pool(processes=io_parameters.number_of_process)
