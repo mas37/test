@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import re
 import os
 import glob
@@ -14,27 +21,36 @@ logger = logging.getLogger(__name__).getChild('checkpoint_ops')
 
 
 class Checkpoint(object):
-    """
-    class to handle a Checkpoint
+    """ A wrapper around a TF checkpoint
+    Checkpoint(path_file, species_list, networks_kind=None,
+               networks_metadata=None)
+
+    Parameters
+    ----------
+        path_file: str
+            complete path to a checkpoint file eg: a/path/to/model.ckpt-0
+        species_list: list of str
+            atom sequence , this argument can be passed None and atomic
+            species will then not be inferred by name but by position.
+            This is for retro compatibility, if possible pass always an
+            atomic sequence
+            eg: ['H','C','N','O']
+        networks_kind: list of str
+            default is: all network are all to all connected feed forward.
+        networks_metadata: list of dict
     """
 
     def __init__(self,
                  path_file,
                  species_list,
+                 species_offsets=None,
                  networks_kind=None,
                  networks_metadata=None):
-        """Init checkpoint
-
-        Args:
-            path_file: eg: a/path/to/model.ckpt-0
-            species_list: atom sequence eg ['H','C','N','O'],
-                       if None atomic species can not be inferred by name
-                       just by position
-        """
         super().__init__()
 
         self._path_file = path_file
         self._species_list = species_list
+        self._species_offsets = species_offsets
 
         self._networks_kind = networks_kind or ['a2ff' for x in species_list]
         self._networks_metadata = networks_metadata or [{
@@ -46,6 +62,8 @@ class Checkpoint(object):
 
     @property
     def get_scaffold(self):
+        # scaffold = SystemScaffold(atomic_sequence=self._species_list,
+        #                           zeros=self._species_offsets)
         scaffold = SystemScaffold()
         for network_kind in set(self._networks_kind):
             if network_kind == 'a2ff':
@@ -66,6 +84,8 @@ class Checkpoint(object):
             for species_idx, network in networks:
                 species = network.name
                 scaffold[str(species)] = network
+                if self._species_offsets:
+                    scaffold[str(species)].offset = self._species_offsets[species_idx]
         scaffold.sort_atomic_sequence(self._species_list)
         return scaffold
 
@@ -166,12 +186,13 @@ class Checkpoint(object):
         scaffold = self.get_scaffold
         metadata = scaffold.metadata
 
-        with open(os.path.join(folder,filename), 'w') as f:
+        with open(os.path.join(folder, filename), 'w') as f:
             f.write("[GVECT_PARAMETERS]\n")
             f.write("Nspecies = {}\n".format(len(scaffold.atomic_sequence)))
-            f.write("species = {}\n".format(",".join(scaffold.atomic_sequence)))
+            f.write("species = {}\n".format(",".join(
+                scaffold.atomic_sequence)))
             for p in extra_data['gvect_params'].keys():
-                f.write("{} = {}\n".format(p,extra_data['gvect_params'][p]))
+                f.write("{} = {}\n".format(p, extra_data['gvect_params'][p]))
 
             for idx_s, species in enumerate(scaffold.atomic_sequence):
                 network = scaffold[species]
@@ -181,24 +202,24 @@ class Checkpoint(object):
                 for idx_l, layer in enumerate(network):
                     sizes.append(layer.b_shape[0])
                     activs.append(layer.activation)
-                    weights = np.append(weights,layer.w_value.flatten())
-                    weights = np.append(weights,layer.b_value.flatten())
+                    weights = np.append(weights, layer.w_value.flatten())
+                    weights = np.append(weights, layer.b_value.flatten())
                 f.write("\n[{}]\n".format(species))
                 f.write("Nlayers = {}\n".format(len(sizes)))
                 f.write("sizes = {}\n".format(",".join(map(str, sizes))))
                 wfname = "weights_{}.dat".format(species)
                 f.write("file = {}\n".format(wfname))
-                f.write("activations = {}\n".format(",".join(map(str, activs))))
-                myfmt='f'*len(weights)
-                binw=struct.pack(myfmt,*weights)
-                wf=open(os.path.join(folder,wfname),"wb")
+                f.write("activations = {}\n".format(",".join(map(str,
+                                                                 activs))))
+                myfmt = 'f' * len(weights)
+                binw = struct.pack(myfmt, *weights)
+                wf = open(os.path.join(folder, wfname), "wb")
                 wf.write(binw)
                 wf.close()
 
             f.close()
-        
-        return None
 
+        return None
 
     @property
     def filename(self):
@@ -262,16 +283,19 @@ class Checkpoint(object):
         for ckp in ckpts:
             parts = glob.glob(os.path.join(directory, '{}.data*'.format(ckp)))
             if len(parts) == 0:
-                logger.info('file {} failed to be loaded'.fromat(f))
-                break
+                logger.info(
+                    'file {} failed to be loaded, no parts'.format(ckp))
+                continue
 
             if len(parts) < int(parts[0].split('-')[4]):
-                logger.info('file {} failed to be loaded'.fromat(f))
-                break
+                logger.info('file {} failed to be loaded, '
+                            'not enough parts'.format(ckp))
+                continue
 
             if not os.path.isfile(
                     os.path.join(directory, '{}.meta'.format(ckp))):
-                break
+                logger.info('file {} failed to be loaded, no meta'.format(ckp))
+                continue
             tmp.append(ckp)
         ckpts = tmp
         ckpts.sort(key=lambda x: int(x.split('-')[-1]))

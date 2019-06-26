@@ -1,3 +1,10 @@
+//###########################################################################
+//# Copyright (c), The PANNAdevs group. All rights reserved.                #
+//# This file is part of the PANNA code.                                    #
+//#                                                                         #
+//# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+//# For further information on the license, see the LICENSE.txt file        #
+//###########################################################################
 
 #include "math.h"
 #include "stdio.h"
@@ -70,10 +77,9 @@ double PairPANNA::Gradial_d(double rdiff, int indr, double *dtmp){
  
 // Angular gvect contribution (and derivative part)
 double PairPANNA::Gangular_d(double rdiff1, double rdiff2, double cosijk, int Rsi, int Thi, double* dtmp){
-  // We'll probably need to insert check for 1-cos going out of bounds
+  if(cosijk> 0.999999999) cosijk =  0.999999999;
+  if(cosijk<-0.999999999) cosijk = -0.999999999;
   double sinijk = sqrt(1.0 - cosijk*cosijk);
-  if(sinijk> 0.999999999) sinijk =  0.999999999;
-  if(sinijk<-0.999999999) sinijk = -0.999999999;
   double iRij = 1.0/rdiff1;
   double iRik = 1.0/rdiff2;
   double Rcent = 0.5 * (rdiff1 + rdiff2) - par.Rsi_ang[Rsi];
@@ -615,9 +621,6 @@ int PairPANNA::get_parameters(char* directory, char* filename)
             std::cout << "Activations list shorter than Nlayers." << std::endl;
             return -3;
           }
-          std::cout << "Activ: ";
-          for(int i=0;i<par.Nlayers[s];i++) std::cout << par.layers_activation[s][i] << " ";
-          std::cout << std::endl;
         }
         else if(key=="file"){
           if(par.layers_size[s][1]==0){

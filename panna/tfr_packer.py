@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import os
 import argparse
 import configparser
@@ -82,15 +89,23 @@ def main(parameters):
         os.makedirs(out_path)
 
     if prefix != '':
-        filename = prefix + '-{}-{}'
+        file_pattern = prefix + '-{}-{}'
     else:
-        filename = '{}-{}'
+        file_pattern = '{}-{}'
 
     n_files = len(f)
     for i, s in enumerate(f):
-        logger.info('file {}/{}'.format(i, n_files))
+        logger.info('file {}/{}'.format(i + 1, n_files))
+
+        filename = file_pattern.format(i + 1, n_files)
+        target_file = os.path.join(out_path, '{}.tfrecord'.format(filename))
+
+        if os.path.isfile(target_file) and (os.path.getsize(target_file) > 0):
+            logger.info('file already computed')
+            continue
+
         gvector.writer(
-            filename=filename.format(i + 1, n_files),
+            filename=filename,
             path=out_path,
             data=[
                 gvector.example_tf_packer(

@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import os
 import json
 import numpy as np
@@ -178,6 +185,7 @@ class SystemScaffold():
                                      folder,
                                      default=None,
                                      atomic_sequence_extension=None,
+                                     original_offsets=None,
                                      load_function=np.load):
         # load the data
         file_name = 'networks_metadata.json'
@@ -190,7 +198,10 @@ class SystemScaffold():
         networks_layers_activation = data['networks_layers_activation']
         networks_layers_trainable = data['networks_layers_trainable']
         networks_name = data['networks_species']
-        networks_offset = data['networks_offset']
+        if original_offsets:
+            networks_offset = original_offsets
+        else:
+            networks_offset = data['networks_offset']
 
         if atomic_sequence_extension == None:
             atomic_sequence_extension = []

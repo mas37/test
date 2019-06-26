@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 """Containg different key generators
 
 hash_key_v2: slighly improved key
@@ -7,7 +14,7 @@ import hashlib
 
 
 def hash_key_v2(example_dict):
-    """Return an unique key for every example
+    """Return a unique key for every example
        IT IS NOT RANDOM
 
     Args:
@@ -18,14 +25,21 @@ def hash_key_v2(example_dict):
 
     # creation of the string
     strings = []
+    lforce = True
     for atom in example_dict['atoms']:
-        idx, kind, position, force = atom
+        try: 
+            idx, kind, position, force = atom
+        except : 
+            lforce = False
+            idx, kind, position = atom
+
         s = str(idx)
         s += str(kind)
         position = [float(x).hex() for x in position]
-        force = [float(x).hex() for x in force]
         s += ''.join(map(str, position))
-        s += ''.join(map(str, force))
+        if lforce : 
+            force = [float(x).hex() for x in force]
+            s += ''.join(map(str, force))
         strings.append(s)
 
     strings.append(str(float(example_dict['energy'][0]).hex()))

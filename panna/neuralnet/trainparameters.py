@@ -1,5 +1,13 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import numpy as np
 import configparser
+from tensorflow.python.platform import tf_logging as logger
 
 if __name__ == 'trainparameters':
     import parser_callable
@@ -11,19 +19,6 @@ else:
     from .a2affnetwork import A2affNetwork
     from .systemscaffold import SystemScaffold
     from .systemscaffold import NetworkNotAvailableError
-
-import logging
-# logger
-logger = logging.getLogger(__name__)
-
-#formatter = logging.formatter('%(asctime)s - %(name)s - '
-#                              '%(levelname)s - %(message)s')
-#formatter = logging.Formatter('%(levelname)s - %(message)s')
-# console handler
-#ch = logging.StreamHandler()
-#ch.setFormatter(formatter)
-#logger.addHandler(ch)
-#logger.setLevel(logging.INFO)
 
 
 class TrainParameters():
@@ -162,6 +157,19 @@ def parameter_file_parser(filename):
             getint('intra_op_parallelism_threads',
                    intra_op_parallelism_threads)
         dataset_cache = parallel.getboolean('dataset_cache', dataset_cache)
+
+        # log all the parameters
+        logger.info('num_parallel_readers: {}'.format(num_parallel_readers))
+        logger.info('num_parallel_calls: {}'.format(num_parallel_calls))
+        logger.info('shuffle_buffer_size_multiplier: {}'.format(
+            shuffle_buffer_size_multiplier))
+        logger.info('prefetch_buffer_size_multiplier: {}'.format(
+            prefetch_buffer_size_multiplier))
+        logger.info('inter_op_parallelism_threads: {}'.format(
+            inter_op_parallelism_threads))
+        logger.info('intra_op_parallelism_threads: {}'.format(
+            intra_op_parallelism_threads))
+        logger.info('dataset_cache: {}'.format(dataset_cache))
     else:
         logger.info('Parallelization is not tuned'
                     ' - using defaults may result in low efficiency')
@@ -212,14 +220,8 @@ def parameter_file_parser(filename):
     en_rescale = data_params.getfloat('energy_rescale', 1.0)
     zeros = data_params.get_comma_list_floats('output_offset', [])
 
-    # search for a default network stored in file
-    default_networks_metadata_folder = data_params.get('networks_metadata',
-                                                       None)
-    if default_networks_metadata_folder:
-        logger.info('Networks in {} will be loaded'.format(
-            default_networks_metadata_folder))
-
     parameters_container = ParametersContainer1AM(en_rescale)
+    default_networks_metadata_folder = None
     # === NETWORK option part ===
     # default network to be loaded
     if 'DEFAULT_NETWORK' in config:
@@ -253,18 +255,25 @@ def parameter_file_parser(filename):
             logger.info('Found a default trainability: {}'.format(
                 default_layer_trainable))
         else:
-            logging.warining('Set to default trainability: all trainable')
+            logging.warning('Set to default trainability: all trainable')
 
         # set activations
         default_layer_act = default_net_params.get_network_act(
             'activations', None)
         if default_layer_act:
-            logger.waring('Found a default activation list: '
-                          '{}'.format(default_layer_act))
+            logger.warning('Found a default activation list: '
+                           '{}'.format(default_layer_act))
         else:
             # default is gaussian:gaussian: ... : linear
             logger.info('Set to default activation: '
                         'gaussians + last linear')
+
+        # search for a default network stored in file
+        default_networks_metadata_folder = default_net_params.get(
+            'networks_metadata', None)
+        if default_networks_metadata_folder:
+            logger.warning('Networks in {} will be loaded'.format(
+                default_networks_metadata_folder))
 
         default_net = A2affNetwork(default_g_size, default_layer_sizes,
                                    'default', None, default_layer_trainable,
@@ -277,7 +286,9 @@ def parameter_file_parser(filename):
 
     if default_networks_metadata_folder:
         system_scaffold = SystemScaffold.load_PANNA_checkpoint_folder(
-            default_networks_metadata_folder, default_net)
+            default_networks_metadata_folder,
+            default_net,
+            original_offsets=zeros)
         # update atomic sequence
         old_atomic_sequence = atomic_sequence
         atomic_sequence = system_scaffold.atomic_sequence

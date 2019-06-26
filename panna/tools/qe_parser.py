@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 #QE xml -> panna json
 #
 #Looks inside the input directory and finds all files that end with .xml 
@@ -17,6 +24,13 @@ import keys_generator
 atom = ['','','','']
 
 def main(indir, outdir, addhash, **kvargs):
+    if os.path.isdir(outdir): 
+       outdir = os.path.abspath(outdir)
+       print(outdir)
+    else:
+       os.mkdir(outdir)
+       outdir = os.path.abspath(outdir)
+       print(outdir)
     #find QE xmls with prefix names
     for rt, dirs, files in os.walk(indir):
         for f in files:
@@ -39,11 +53,13 @@ def main(indir, outdir, addhash, **kvargs):
                 #INPUT
                 inp = root.find('input')
                 control_variables = inp.find('control_variables')
+                #whether forces are calculated
+                lforces = control_variables.find('forces').text
                 panna_json['key'] = control_variables.find('prefix').text
                 #emine: in the future key or json filename might become the hash of the xml file maybe to ensure uniqueness ?
                 atomic_str = inp.find('atomic_structure')
                 # alat = atomic_str.attrib['alat'] - panna doesnt use
-                # nat = atomic_str.attrib['nat'] - panna doesnt use - could be used for sanity check?
+                nat = int(atomic_str.attrib['nat']) # used to fill in forces when they are not calculated
                 # ATOMIC POSITIONS
                 atomic_pos = atomic_str.find('atomic_positions')
                 #for idx, at in enumerate(atomic_pos.findall('atom')) :
@@ -65,31 +81,46 @@ def main(indir, outdir, addhash, **kvargs):
                 # TOTAL ENERGY
                 total_energy = outp.find('total_energy')
                 etot = float(total_energy.find('etot').text)
-                unit_of_energy = "Ry" #QE default - any reason to change this?
-                panna_json['energy']=[etot,unit_of_energy]
+                unit_of_energy = "Ha" #QE default - any reason to change this?
+                panna_json['energy']=(etot,unit_of_energy)
                 # FORCES
+                # assues that forces are calculated
                 forces = []
-                force_array = outp.find('forces').text.split()
-                for i in range(0,len(force_array),3):
-                    forces.append( [float(force_array[i]),float(force_array[i+1]), float(force_array[i+2])] )
-                # ATOMIC POSITIONS -better added here than before
-                for idx, at in enumerate(atomic_pos.findall('atom')) :
-                    atom[0] = int(at.attrib['index'])
-                    atom[1] = str(at.attrib['name'])
-                    atom[2] = at.text.split() # scientific notation atomic positions list
-                    atom[2] = [float(atom[2][0]),float(atom[2][1]),float(atom[2][2])]
-                    panna_json['atoms'].append([atom[0] , atom[1] , atom[2], forces[idx] ])
+                if lforces == 'true' :
+                    force_array = outp.find('forces').text.split()
+                    for i in range(0,len(force_array),3):
+                        forces.append( [float(force_array[i]),float(force_array[i+1]), float(force_array[i+2])] )
+                #else: 
+                #    for i in range(0,nat):
+                #        forces.append( )
+
+                # ATOMIC POSITIONS -better added here than beforei
+                if lforces == 'true' :
+                    for idx, at in enumerate(atomic_pos.findall('atom')) :
+                        atom[0] = int(at.attrib['index'])
+                        atom[1] = str(at.attrib['name'])
+                        atom[2] = at.text.split() # scientific notation atomic positions list
+                        atom[2] = [float(atom[2][0]),float(atom[2][1]),float(atom[2][2])]
+                        panna_json['atoms'].append([atom[0] , atom[1] , atom[2], forces[idx] ])
+                elif lforces == 'false' :
+                    for idx, at in enumerate(atomic_pos.findall('atom')) :
+                        atom[0] = int(at.attrib['index'])
+                        atom[1] = str(at.attrib['name'])
+                        atom[2] = at.text.split() # scientific notation atomic positions list
+                        atom[2] = [float(atom[2][0]),float(atom[2][1]),float(atom[2][2])]
+                        panna_json['atoms'].append([atom[0] , atom[1] , atom[2] ])
+
     
                 #print panna_json
                 #use hash if necessary
                 if addhash : 
-                    panna_json_name = keys_generator.hash_key(panna_json)
+                    panna_json_name = keys_generator.hash_key_v2(panna_json)
                 else : 
                     panna_json_name = f.split('.xml')[0]
                 #
-                cwd = os.getcwd()
-                if not os.path.exists(cwd+"/"+outdir):
-                    os.makedirs(outdir)
+                #cwd = os.getcwd()
+                #if not os.path.exists(cwd+"/"+outdir):
+                #    os.makedirs(outdir)
                 #print(outdir)
                 #remove the trailing slash if there was any
                 with open(outdir.rstrip('/')+"/"+panna_json_name+".example",'w') as outfile:

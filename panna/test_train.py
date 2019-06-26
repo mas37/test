@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import os
 import train
 import shutil
@@ -25,6 +32,8 @@ class Test_train(unittest.TestCase):
                                                       None)
                 self.communication_port = kvarg.get('communication_port',
                                                     22222)
+                self.parameter_servers = kvarg.get('parameter_servers',
+                                                    0)
 
             def __getattr__(self, attr_name):
                 """
@@ -42,13 +51,15 @@ class Test_train(unittest.TestCase):
         os.chdir(self.cwd)
         # comment this line to not delete the outputs!!
         try:
-            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir))
+            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir),ignore_errors=True)
         except AttributeError:
             pass
 
     def test_1(self):
+        
         """ Testing for training features
         """
+        train.tf.reset_default_graph()
         test_data_dir = './tests/test_train_1'
         self.test_data_dir = test_data_dir
         if not os.path.isdir(test_data_dir):
@@ -116,10 +127,12 @@ class Test_train(unittest.TestCase):
         refE_0 = np.asarray([-0.00003815, 0.00082397])
         np.testing.assert_allclose(outE[0], refE_0)
         np.testing.assert_allclose(outE[-1], np.zeros(2), rtol=1e-5)
+        train.tf.reset_default_graph()
 
     def test_2(self):
         """ Testing for training features
         """
+        train.tf.reset_default_graph()
         test_data_dir = './tests/test_train_2'
         self.test_data_dir = test_data_dir
         if not os.path.isdir(test_data_dir):
@@ -196,7 +209,7 @@ class Test_train(unittest.TestCase):
         std_2 = np.std(outE[-1])
 
         self.assertEqual(std_1 > std_2 * 10, True)
-
+        train.tf.reset_default_graph()     
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import tensorflow as tf
 import numpy as np
 
@@ -209,6 +216,19 @@ def loss_NN(batch_energies, batch_energies_dft, batch_natoms,
                 2.0 * tf.reduce_sum(
                     tf.div(batch_delta_e2, tf.square(batch_natoms))),
                 name='1.LOSS-Exp_Delta_per_atom_E2')
+        elif loss_func == "quad_exp_tanh_atom":
+            a = tf.constant(5.0)
+            red_sum = tf.div(
+                tf.reduce_sum(tf.div(batch_delta_e2, tf.square(batch_natoms))),
+                a)
+            tot_loss = tf.add(tf.reduce_sum(batch_delta_e2), tf.exp(tf.multiply(a, tf.tanh(red_sum))), \
+                              name = '1.LOSS-quad_exp_tanh_peratom_Delta_E2')    
+        elif loss_func == "quad_exp_tanh":
+            a = tf.constant(5.0)
+            red_sum = tf.div( tf.reduce_sum(batch_delta_e2), a)
+            tot_loss = tf.add(tf.reduce_sum(batch_delta_e2), tf.exp(tf.multiply(a, tf.tanh(red_sum))), \
+                              name = '1.LOSS-quad_exp_tanh_Delta_E2')
+
         with tf.name_scope('graphs_variable'):
             mean_delta_e = tf.reduce_mean(batch_delta_e)
             mean_delta_e2 = tf.reduce_mean(batch_delta_e2)
@@ -290,10 +310,10 @@ def loss_F(batch_species,
         lossF = 0.5 * tf.exp(2.0 * tf.reduce_sum(lossF), name='5.F_Loss')
     elif floss_func == "quad_atom":
         lossF = tf.reduce_sum(
-            tf.div(lossF, tf.square(batch_natoms)), name='5.F_Loss')
+            tf.div(tf.reduce_sum(lossF, axis=-1), tf.square(batch_natoms)), name='5.F_Loss')
     elif floss_func == "exp_quad_atom":
         lossF = 0.5 * tf.exp(
-            2.0 * tf.reduce_sum(tf.div(lossF, tf.square(batch_natoms))),
+            2.0 * tf.reduce_sum(tf.div(tf.reduce_sum(lossF, axis=-1), tf.square(batch_natoms))),
             name='5.F_Loss')
 
     tf.add_to_collection('losses', lossF)

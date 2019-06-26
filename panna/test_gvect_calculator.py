@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import os
 import shutil
 import unittest
@@ -14,7 +21,7 @@ class Test_Gvector_Calculator(unittest.TestCase):
 
     def tearDown(self):
         os.chdir(self.cwd)
-        shutil.rmtree(os.path.join(self.cwd, self.test_data_dir))
+        shutil.rmtree(os.path.join(self.cwd, self.test_data_dir),ignore_errors=True)
 
     def test_1(self):
         '''

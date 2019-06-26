@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import os
 import train
 import shutil
@@ -7,14 +14,14 @@ import numpy as np
 from evaluate import main as evaluate
 
 
-class Test_Evalueate(unittest.TestCase):
+class Test_Evaluate(unittest.TestCase):
     def setUp(self):
         self.cwd = os.getcwd()
 
     def tearDown(self):
         os.chdir(self.cwd)
         try:
-            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir))
+            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir), ignore_errors=True)
         except AttributeError:
             pass
 
@@ -26,7 +33,7 @@ class Test_Evalueate(unittest.TestCase):
         if not os.path.isdir(test_data_dir):
             os.makedirs(test_data_dir)
         else:
-            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir))
+            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir), ignore_errors=True)
             os.makedirs(test_data_dir)
 
         os.chdir(test_data_dir)
@@ -88,7 +95,7 @@ class Test_Evalueate(unittest.TestCase):
         if not os.path.isdir(test_data_dir):
             os.makedirs(test_data_dir)
         else:
-            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir))
+            shutil.rmtree(os.path.join(self.cwd, self.test_data_dir),ignore_errors=True)
             os.makedirs(test_data_dir)
 
         os.chdir(test_data_dir)

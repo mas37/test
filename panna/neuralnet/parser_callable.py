@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import re
 
 
@@ -64,7 +71,7 @@ def get_network_act(value):
     lin = ['l', 'L', 'linear', 'LINEAR', '0']
     gauss = ['g', 'G', 'gauss', 'gaussian', '1']
     rbf = ['rbf', 'RBF', '2']
-    relu = ['relu', 'rl', 'RELU', 'RL', '3']
+    relu = ['relu', 'rl', 'RELU', 'RL', 'ReLU', '3']
     tanh = ['tanh', 'TANH', 'th', '4']
     avail_acts = [lin, gauss, rbf, relu, tanh]
 

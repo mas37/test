@@ -1,199 +1,281 @@
-import numpy as np
-import itertools
-from gvector.pbc import replicas_max_idx
-import json
-import os
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
+## CALCULATE FINGERPRINTS
+## A LA USPEX
+## -i -o --nproc --dimension
+
 import argparse
+import itertools
+import json
+import math
 import multiprocessing as mp
+import os
+
+import random
 from functools import partial
+
+import numpy as np
 from scipy.special import erf
 
-number_of_process = 20
+# PANNA interfaces
+# add PANNA folder to PYTHONPATH variable to enable these
+# SEE README.md
+from gvector.pbc import replicas_max_idx
 
 
-def fingprint(Rmax, delta, sigma, outdir, filename):
-    '''This module compute fingerprint for a given configuration in json
-       The fingerprint are saved in json for each pair and the associated weights
-       the total energy of configuration.
+def fingprint(Rmax, delta, sigma, outdir, d, filename):
+    '''This module computes a fingerprint array for a given configuration in panna json
        e.g: for a system with H and C: {"HH":[....],"wHH": real-number, "HC":[....].. etc}
 
        Rmax: cutoff
-       delta: descritization steps
+       delta: descritization step / bin interval
        sigma: gaussian width
        outdir: output folder where fingerprint is written
-       filename is the input json (currectly in .simulation extension)
+       d: dimensions (3, regular 2 surface material)
+       filename is the input json (currectly in .example extension)
     '''
+    with open(filename) as file_stream:
+        example = json.load(file_stream)
 
-    df = open(filename, 'r')
-    data = json.load(df)
-    outfile = filename.split('/')[-1]
-    figpr = open(os.path.join(outdir, outfile.split('.')[0]), 'w+')
+    unit_of_length = example.get('unit_of_length', '')
+    if unit_of_length in ['bohr', 'au', 'Bohr']:
+        A2unit = 1.0 / 0.529177
+    elif unit_of_length in ['A', 'Ang', 'ang', 'angstrom', 'Angstrom']:
+        A2unit = 1.0
+    else:
+        print('unit of length not recognized, assumed Angstrom', flush=True)
+        A2unit = 1.0
 
-    vol = np.abs(np.dot(data['lattice_vectors'][0],\
-                 np.cross(data['lattice_vectors'][1],\
-                 data['lattice_vectors'][2])))
-    atomic_position_unit = data['atomic_position_unit']
+    r_max = Rmax * A2unit
+    delta = delta * A2unit
+    sigma = sigma * A2unit
 
-    lattice_vectors = np.asarray(data['lattice_vectors']).astype(float)
+    energy = float(example['energy'][0])
+    if example['energy'][1] in ['eV', 'ev', 'EV']:
+        unit2eV = 1.0
+    elif example['energy'][1] in ['Ry', 'rydberg', 'Rydberg', 'Ryd']:
+        unit2eV = 13.605698066
+
+    outfile = filename.split('/')[-1].split('.example')[0] + ".fprint"
+
+    lattice_vectors = np.asarray(example['lattice_vectors']).astype(float)
+    volume = np.abs(
+        np.dot(lattice_vectors[0],
+               np.cross(lattice_vectors[1], lattice_vectors[2])))
+
+    if d == 2:
+        volume = 1.0  # vol is not important for 2d structures, dont use it in the definition of FPs
+
+    atomic_position_unit = example['atomic_position_unit']
+
+    pos_vector = []
+    type_vector = []
+
+    # recover atomic info from file
+    for atom in example['atoms']:
+        try:
+            idx, symbol, position, *dummy = atom
+        except ValueError:
+            idx, symbol, position = atom
+
+        if atomic_position_unit == "crystal":
+            pos_vector.append(
+                np.dot(
+                    np.transpose(lattice_vectors),
+                    np.asarray(position).astype(float)))
+        else:
+            pos_vector.append(np.asarray(position).astype(float))
+
+        type_vector.append(symbol)
+
+    pos_vector = np.asarray(pos_vector)
+
+    all_symbols = list(set(type_vector))
+    _symbol_map = {char: idx for idx, char in enumerate(all_symbols)}
+
+    # convert type vector to int vector with internal mapping
+    type_vector = np.asarray([_symbol_map[x] for x in type_vector],
+                             dtype=np.int)
+
+    n_atoms = len(type_vector)
+    n_species = len(all_symbols)
+
+    # compute total weight
+    weight_ab = 0
+    unique, counts = np.unique(type_vector, return_counts=True)
+    unique_counts = dict(zip(unique, counts))
+
+    for a in range(n_species):
+        n_atoms_type_a = unique_counts[a]
+        for b in range(a, n_species):
+            n_atoms_type_b = unique_counts[b]
+            weight_ab += n_atoms_type_a * n_atoms_type_b
+    #################################
+
+    radial_sampling_vector_bottom = np.arange(0, Rmax, delta)
+    radial_sampling_vector_top = np.arange(0, Rmax, delta) + delta
+
+    # creating all the displacement vectors
     max_indices = replicas_max_idx(lattice_vectors, Rmax)
     l_max, m_max, n_max = max_indices
+    if d == 2:
+        n_max = 0  # uspex generated 2d files have always z for their aperiodic axis.
+        # and the structure always fits in single cell
     l_list = range(-l_max, l_max + 1)
     m_list = range(-m_max, m_max + 1)
     n_list = range(-n_max, n_max + 1)
 
-    energy = data['energy'][0]
-    pos = []
-    atype = []
-    all_symbols = []
-    for atom in data['atoms']:
-        idx, symbol, position, force = atom
-        if atomic_position_unit == "crystal":
+    # number of replicas, 3
+    replicas_idxs = np.asarray(list(itertools.product(l_list, m_list, n_list)))
+    n_replicas = len(replicas_idxs)
+    # the lattice matrix should be [a1, a2, a3]
+    # nubmer of replicas, 3
+    # replicas_displeacemnt_vecotrs = np.einsum('ij,jk->ik', replicas_idxs,
+    #                                           lattice_vectors)
+    replicas_displeacemnt_vecotrs = replicas_idxs @ lattice_vectors
+    # number of replicas * number of atoms, 3
+    extended_pos_vector = (
+        pos_vector[:, np.newaxis, :] + replicas_displeacemnt_vecotrs).reshape(
+            n_atoms * n_replicas, 3)
+    extended_type_vector = np.tile(type_vector[:, np.newaxis],
+                                   [1, n_replicas]).flatten()
 
-            pos.append([
-                idx, symbol,
-                np.dot(
-                    np.transpose(lattice_vectors),
-                    np.asarray(position).astype(float))
-            ])
-        else:
-            pos.append([idx, symbol, np.asarray(position).astype(float)])
+    # distance matrix
 
-        all_symbols.append(symbol)
+    extended_deltas = pos_vector[:, np.newaxis, :] - extended_pos_vector
+    extended_distances = np.linalg.norm(extended_deltas, axis=-1)
 
-        if symbol not in atype:
-            atype.append(symbol)
-    data['atoms'] = pos
-    Natoms = len(pos)
-    Nspecies = len(atype)
-    # compute total weight
-    weightab = 0
-    for i in range(Nspecies):
-        Na = all_symbols.count(atype[i])
-        for j in range(i, Nspecies):
-            Nb = all_symbols.count(atype[j])
-            weightab += Na * Nb
-    #################################
+    fingerprints_dict = {}
 
-    F_size = int(Nspecies * (Nspecies + 1) * 0.5)
-    Nr = int((Rmax) / delta)
-    F_vector = -np.ones((F_size, Nr), dtype=float)
+    for specie_a in range(n_species):
+        row_index = np.where(type_vector == specie_a)[0]
+        n_atoms_a = len(row_index)
+        for specie_b in range(specie_a, n_species):
+            column_index = np.where(extended_type_vector == specie_b)[0]
+            submatrix = extended_distances[row_index[:, None], column_index]
+            radius_mask = np.logical_and(submatrix < r_max, submatrix > 1e-5)
+            submatrix = submatrix[radius_mask]
 
-    for idx_i in range(Nspecies):
-        typa = atype[idx_i]
-        Na = all_symbols.count(typa)
-        for atom1 in data['atoms']:
+            n_atoms_b = len(np.where(type_vector == specie_b)[0])
 
-            idxi, symboli, pos_i = atom1
-            pos_i = np.asarray(pos_i).astype(float)
-            if symboli == typa:
-                for idx_j in range(idx_i, Nspecies):
-                    typb = atype[idx_j]
+            submatrix_bottom_sampling = radial_sampling_vector_bottom -\
+                submatrix[:, np.newaxis]
+            submatrix_top_sampling = radial_sampling_vector_top -\
+                submatrix[:, np.newaxis]
+            erf_delta = erf(
+                submatrix_top_sampling / (np.sqrt(2) * sigma)) - erf(
+                    submatrix_bottom_sampling / (np.sqrt(2) * sigma))
 
-                    Nb = 0
-                    idx_row = int(idx_i * (Nspecies - (idx_i + 1) * 0.5) +
-                                  idx_j)
-                    Nb = all_symbols.count(typb)
-                    for atom2 in data['atoms']:
-                        idxj, symbolj, posj = atom2
-                        # loop over all cells around
-                        if symbolj == typb:
-                            for l, m, n in itertools.product(
-                                    l_list, m_list, n_list):
-                                pos_j = np.asarray(posj).astype(float) +\
-                                            l * lattice_vectors[0] +\
-                                            m * lattice_vectors[1] +\
-                                            n * lattice_vectors[2]
+            dbl_sum = np.sum(erf_delta / submatrix[:, np.newaxis]**2, axis=0)
 
-                                Rij = np.linalg.norm(pos_j - pos_i)
-                                if Rij <= Rmax and Rij > 1e-5:
+            normalization = .5 * volume / (
+                4 * np.pi * n_atoms_a * n_atoms_b * delta)
+            fingerprint_ab = -1 + normalization * dbl_sum
 
-                                    idx_bin = int(Rij / delta)
-                                    #  bins_away = range(idx_bin-int(delta/sigma),\
-                                    #              int(delta/sigma)+idx_bin)
-                                    deltafunct = 1.0e10
-                                    idxfict = idx_bin
-                                    while deltafunct > 0.000001:
-                                        Rk_down = (idxfict) * delta
-                                        Rk_up = (idxfict + 1) * delta
-                                        R1 = (Rk_down - Rij) / np.sqrt(
-                                            2.0 * sigma**2)
-                                        R2 = (Rk_up - Rij) / np.sqrt(
-                                            2.0 * sigma**2)
-                                        deltafunct = 0.5 * (erf(R2) - erf(R1))
-                                        #print(deltafunct,idxfict,idx_bin)
-                                        idxfict += 1
-                                    bins_away = range(2 * idx_bin - idxfict,
-                                                      idxfict)
+            name_string = all_symbols[specie_a] + all_symbols[specie_b]
+            fingerprints_dict[name_string] = fingerprint_ab.tolist()
+            fingerprints_dict['w' +
+                              name_string] = n_atoms_a * n_atoms_b / weight_ab
+    fingerprints_dict['energy'] = energy * unit2eV
+    fingerprints_dict['vol'] = volume * (1.0 / A2unit)**3
+    fingerprints_dict['number_atoms'] = n_atoms
 
-                                    for idx_column in bins_away:
-                                        if 0 <= idx_column <= int(
-                                                Rmax / delta) - 1:
-                                            Rk_down = (idx_column) * delta
-                                            Rk_up = (idx_column + 1) * delta
-                                            R1 = (Rk_down - Rij) / np.sqrt(
-                                                2.0 * sigma**2)
-                                            R2 = (Rk_up - Rij) / np.sqrt(
-                                                2.0 * sigma**2)
-                                            deltafunc = 0.5 * (
-                                                erf(R2) - erf(R1))
-                                            #   print(idx_column,int(Rmax/delta),deltafunc)
-
-                                            F_vector[idx_row][idx_column] += deltafunc*vol/\
-                                                              (4.*np.pi*Rij**2*Na*Nb*delta)
-
-    F_vector_dict = {}
-    for idx_i in range(Nspecies):
-        typa = atype[idx_i]
-        Na = all_symbols.count(typa)
-        for idx_j in range(idx_i, Nspecies):
-            typb = atype[idx_j]
-            Nb = all_symbols.count(typb)
-            idx_row = int(idx_i * (Nspecies - (idx_i + 1) * 0.5) + idx_j)
-            F_vector_dict[typa + typb] = F_vector[idx_row].tolist()
-            F_vector_dict['w' + typa + typb] = Na * Nb / weightab
-    F_vector_dict['energy'] = energy
-    figpr.write(json.dumps(F_vector_dict))
-    figpr.close()
+    with open(os.path.join(outdir, outfile), 'w') as fingerprint_outstream:
+        json.dump(fingerprints_dict, fingerprint_outstream)
     return
 
 
-def main(indir, outdir):
+def main(indir, outdir, nproc, d):
     #compute many configuration at a time
+    print('Input dir {}'.format(indir), flush=True)
+    print('Output dir requested {}'.format(outdir), flush=True)
+    print('Number of parallel processes {}'.format(nproc), flush=True)
+    print('Structure is assumed {} dimensional'.format(d), flush=True)
+    p = mp.Pool(nproc)
+    if os.path.isdir(outdir):
+        outdir = os.path.abspath(outdir)
+        print('Output dir exists: {}'.format(outdir), flush=True)
+    else:
+        os.makedirs(outdir)
+        outdir = os.path.abspath(outdir)
+        print('Output dir created: {}'.format(outdir), flush=True)
 
-    p = mp.Pool(number_of_process)
+    fp_done_key = []
 
-    if not os.path.exists(outdir):
-        os.mkdir(outdir)
-    files = [os.path.join(indir,x) for x in os.listdir(indir) \
-            if x.split('.')[-1]=='simulation' and \
-            os.stat(os.path.join(indir,x)).st_size != 0]
+    #COMMENT OUT THIS PART IF YOU DONT WANT TO CHECK FOR THE EXAMPLES ALREADY PROCESSED
+    for rt, dirs, files in os.walk(outdir):
+        for f in files:
+            if f.endswith('.fprint') and os.stat(os.path.join(rt,
+                                                              f)).st_size != 0:
+                fp_done_key.append(f.split('.fprint')[0])
+    ###########
+    #
+    print('the #  json files already done', flush=True)
+    print(len(fp_done_key), flush=True)
+    #print(fp_done_key[0], flush=True)
+    jsonfiles = []
+    for rt, dirs, files in os.walk(indir):
+        for f in files:
+            #print(f)
+            if f.endswith('.example') and f.split(
+                    '.example')[0] not in fp_done_key:
+                #print(f)
+                jsonfiles.append(os.path.join(rt, f))
 
+    print('the #  json files to be done {}'.format(len(jsonfiles)), flush=True)
+    #print(len(jsonfiles), flush=True)
+    if len(jsonfiles) > 0:
+        random.shuffle(jsonfiles)
+        print('the first one in line {}'.format(jsonfiles[0]), flush=True)
+    #jsonfiles=[os.path.join(indir, 'T1200_step1414.example')]
     Rmax = 10.0  #Ang
     delta = 0.08  #Ang
     sigma = 0.03  #Ang
     #sigma = sigma/np.sqrt(2 * np.log(2))
     ###############################################################
-    Fingprint = partial(fingprint, Rmax, delta, sigma, outdir)
+    #ff=open(os.path.join(outdir , 'fp_done.dat'), 'a')
+    Fingprint = partial(fingprint, Rmax, delta, sigma, outdir, d)
     i = 0
-    while i <= int(len(files) / number_of_process):
-        ll = i * number_of_process
-        lu = (i + 1) * number_of_process
+    print(
+        'Jsons to be done per proc = {}'.format(int(len(jsonfiles) / nproc)),
+        flush=True)
+    while i <= int(len(jsonfiles) / nproc):
+        ll = i * nproc
+        lu = (i + 1) * nproc
         try:
-            fi = files[ll:lu]
+            fi = jsonfiles[ll:lu]
         except IndexError:
-            fi = files[ll, len(files)]
+            fi = jsonfiles[ll, len(files)]
         data = p.map(Fingprint, fi)
+        #ff.write(','.join(map(str,fi)))
         i += 1
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='making FP')
+    parser = argparse.ArgumentParser(description='makes FingerPrints')
     parser.add_argument(
         '-i', '--indir', type=str, help='in path', required=True)
-
     parser.add_argument(
         '-o', '--outdir', type=str, help='out path', required=True)
+    parser.add_argument(
+        '--nproc', type=int, help='omp_num_threads', required=False, default=1)
+    parser.add_argument(
+        '--dimension',
+        type=int,
+        help='number of dimensions',
+        required=False,
+        default=3)
 
     args = parser.parse_args()
-    if args.indir and args.outdir:
-        main(indir=args.indir, outdir=args.outdir)
+    print('BEGIN FP CALCULATION')
+    #print(args.nproc)
+    main(
+        indir=args.indir,
+        outdir=args.outdir,
+        nproc=args.nproc,
+        d=args.dimension)

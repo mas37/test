@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 # expander for ani data
 
 import os
@@ -100,7 +107,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='ANI data expander :)')
+    parser = argparse.ArgumentParser(description='ANI data expander ')
     parser.add_argument('-in', '--hdf5file', type=str,
                         help='file to decompress', required=True)
     parser.add_argument('-out', '--output_folder', type=str,

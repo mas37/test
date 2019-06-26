@@ -1,13 +1,13 @@
 # HOW TO:
-Since we do not distribute PANNA as a library to use the tools add the PANNA 
-folder to the shell variable PYTHONPATH
+Currently PANNA is not distributed as a library. 
+To use the tools, add PANNA folder to the shell variable PYTHONPATH
 
 ```script
    export PYTHONPATH=/path/to/panna
 ```
 
 # ijk.py
-It is a tool that shows a heat map of the distribution of the radial part.
+This tool shows a heat map of the distribution of the G-vector elements.
 parameters
   - -s or --source: source folder where examples files are located
   - -r or --r_cut: radial cutoff to plot in Angstrom

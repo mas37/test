@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 """
   code used to extract weights from a checkpoint
 """
@@ -6,11 +13,13 @@ import logging
 import argparse
 import configparser
 
+from tensorflow.errors import NotFoundError
+
 import neuralnet as net
 from gvect_calculator import parse_file as parse_gvect_input
 
 # logger
-logger = logging.getLogger('logfile')
+logger = logging.getLogger(__name__)
 formatter = logging.Formatter('%(asctime)s - %(name)s - \
     %(levelname)s - %(message)s')
 
@@ -30,6 +39,9 @@ def main(conf_file):
     species_list_string = folder_info.get('species_list', None)
     if species_list_string:
         species_list = species_list_string.split(',')
+    species_offsets_string = folder_info.get('species_offsets', None)
+    if species_offsets_string:
+        species_offsets = species_offsets_string.split(',')
     train_input = folder_info.get('train_input', None)
     gvector_input = folder_info.get('gvector_input', None)
     output_type = folder_info.get('output_type', 'PANNA')
@@ -42,26 +54,36 @@ def main(conf_file):
             parameters_container, system_scaffold = net.parameter_file_parser(train_input)
         if species_list_string == None:
             species_list = system_scaffold.atomic_sequence
+        if species_offsets_string == None:
+            species_offsets = system_scaffold.old_zeros
 
     if gvector_input:
-        gvect_func, folder_parameters, number_of_process = parse_gvect_input(gvector_input)
+        gvect_func, folder_parameters, number_of_process = parse_gvect_input(
+            gvector_input)
         extra_data['gvect_params'] = gvect_func.gvect
 
     ck_files = net.Checkpoint.checkpoint_file_list(in_dir)
     ck_steps = net.Checkpoint.checkpoint_step_list(in_dir)
+
     if step_number in ck_steps:
         if not os.path.isdir(out_dir):
             os.mkdir(out_dir)
         ck = net.Checkpoint(
             os.path.join(in_dir, 'model.ckpt-{}'.format(step_number)),
-            species_list=species_list)
-        if output_type=='PANNA':
-            ck.dump_PANNA_checkpoint_folder(folder=out_dir, extra_data=extra_data)
-        elif output_type=='LAMMPS':
-            ck.dump_LAMMPS_checkpoint_folder(folder=out_dir, filename=output_file,
-                                             extra_data=extra_data)
-        else:
-            logger.info('Unknown output type {}'.format(output_type))
+            species_list=species_list, species_offsets=species_offsets)
+        try:
+            if output_type == 'PANNA':
+                ck.dump_PANNA_checkpoint_folder(
+                    folder=out_dir, extra_data=extra_data)
+            elif output_type == 'LAMMPS':
+                ck.dump_LAMMPS_checkpoint_folder(
+                    folder=out_dir,
+                    filename=output_file,
+                    extra_data=extra_data)
+            else:
+                logger.info('Unknown output type {}'.format(output_type))
+        except NotFoundError:
+            logger.warning('{} not found because of TF bug'.format(x.filename))
         logger.info('Weights saved in {}'.format(out_dir))
     else:
         logger.info('step number {} not found'.format(step_number))

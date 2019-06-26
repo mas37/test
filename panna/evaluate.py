@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 """ Code use to evaluate a dataset on a checkpoint/s
 note:
     if batchsize == -1 then use the whole dataset
@@ -9,6 +16,8 @@ import configparser
 import random as rnd
 import numpy as np
 import multiprocessing as mp
+
+from tensorflow.errors import NotFoundError
 
 import neuralnet as net
 from neuralnet.systemscaffold import SystemScaffold
@@ -43,23 +52,45 @@ def _eval_function(example, scaffold, add_offset):
 
 
 def _eval_function_forces(example, scaffold, add_offset):
-    """Helper for parallelization
+    """Helper for parallelization when computing forces
 
-    Args:
-        example: a example obj
-        scaffold: a scaffold obj
-    Return:
-        a string: n_natoms, dft, prediction
+    Parameters
+    ----------
+    example:
+        the example to be evaluate
 
+    scaffold:
+        the scaffold with the networks that will
+        be used in the evaluation
+
+    add_offset: bool
+        boolean to enable/disable the offset
+
+    Returns
+    -------
+    string
+        'n_atoms reference energy predicted energy'
+    string
+        'example_id atom_id fx fy fz'
     """
-    en_prediction, forces = scaffold.evaluate(example, True, add_offset)
-    en_dft = example.true_energy
-    string = '{} {} {} {}'.format(example.name, example.n_atoms, en_dft,
+
+    en_prediction, forces_prediction = scaffold.evaluate(
+        example, True, add_offset)
+
+    n_atoms = example.n_atoms
+    en_ref = example.true_energy
+    forces_ref = example.forces
+
+    string = '{} {} {} {}'.format(example.name, example.n_atoms, en_ref,
                                   en_prediction)
-    forces_reshape = forces.reshape(int(len(forces) / 3), 3)
+
+    forces_ref = forces_ref.reshape(n_atoms, 3)
+    forces_prediction = forces_prediction.reshape(n_atoms, 3)
     string2_list = [
-        example.name + ' {} '.format(idx) + ' '.join([str(f) for f in line])
-        for idx, line in enumerate(forces_reshape)
+        example.name + ' {} '.format(idx) + ' '.join([
+            str(f) for f in forces_prediction[idx]
+        ]) + ' ' + ' '.join([str(f) for f in forces_ref[idx]])
+        for idx in range(n_atoms)
     ]
     string2 = '\n'.join(string2_list) + '\n'
     return string, string2
@@ -100,9 +131,9 @@ def parse_file(conf_file):
 
     io_parameters.number_of_process = 4
     if config.has_section('PARALLELIZATION'):
-        parallel = config['PARALLELIZATION']
+        parallelization = config['PARALLELIZATION']
         io_parameters.number_of_process = parallelization.getint(
-            'number_of_process', number_of_process)
+            'number_of_process', io_parameters.number_of_process)
 
     class DataParameters():
         pass
@@ -117,7 +148,7 @@ def parse_file(conf_file):
 
     data_parameters.g_size = data_information.getint('g_size')
     zeros = data_information.get_comma_list_floats(
-        'zeros', [0.0 for x in data_parameters.atomic_sequence])
+        'output_offset', [0.0 for x in data_parameters.atomic_sequence])
     zeros = np.asarray(zeros)
 
     class ValidationParameters():
@@ -260,20 +291,39 @@ def main(parameters):
                              x), data_parameters.atomic_sequence,
                 networks_kind, networks_metadata) for x in ck_files
         ]
-        nns = [x.get_scaffold for x in cks]
 
-        writers = [
-            open(
-                os.path.join(io_parameters.eval_dir, '{}.dat'.format(x)), 'w')
-            for x in ck_steps
-        ]
+        nns_tmp = []
+        for x in cks:
+            try:
+                scaf = x.get_scaffold
+                nn_tmp.append(scaf)
+            except NotFoundError:
+                logger.warning('{} not found because of TF bug'.format(
+                    x.filename))
+
+        nns = []
+        writers = []
         if validation_parameters.compute_forces:
-            f_writers = [
+            f_writers = []
+
+        for x, nn in zip(ck_steps, nns_tmp):
+            file_name = os.path.join(io_parameters.eval_dir,
+                                     '{}.dat'.format(x))
+            if os.path.isfile(file_name) and os.path.getsize(file_name) > 100:
+                logger.info('{} already computed'.format(file_name))
+                continue
+
+            writers.append(
                 open(
-                    os.path.join(io_parameters.eval_dir,
-                                 '{}_forces.dat'.format(x)), 'w')
-                for x in ck_steps
-            ]
+                    os.path.join(io_parameters.eval_dir, '{}.dat'.format(x)),
+                    'w'))
+            nns.append(nn)
+
+            if validation_parameters.compute_forces:
+                f_writers.append(
+                    open(
+                        os.path.join(io_parameters.eval_dir,
+                                     '{}_forces.dat'.format(x)), 'w'))
 
     elif io_parameters.networks_format == 'PANNA':
         arch_file = os.path.join(io_parameters.networks_folder,
@@ -302,10 +352,14 @@ def main(parameters):
 
     logger.info('----start----')
 
-    [x.write('#filename n_atoms e_dft e_nn\n') for x in writers]
+    [x.write('#filename n_atoms e_ref e_nn\n') for x in writers]
 
     if validation_parameters.compute_forces:
-        [x.write('#filename atom_id fx_ref fx_nn fy_ref fy_nn fz_ref fz_nn\n') for x in f_writers]
+        [
+            x.write(
+                '#filename atom_id fx_nn fy_nn fz_nn fx_ref fy_ref fz_ref\n')
+            for x in f_writers
+        ]
 
     examples = []
     pool = mp.Pool(processes=io_parameters.number_of_process)

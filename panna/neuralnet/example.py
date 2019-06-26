@@ -1,3 +1,10 @@
+###########################################################################
+# Copyright (c), The PANNAdevs group. All rights reserved.                #
+# This file is part of the PANNA code.                                    #
+#                                                                         #
+# The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
+# For further information on the license, see the LICENSE.txt file        #
+###########################################################################
 import json
 import numpy as np
 import tensorflow as tf
@@ -44,9 +51,6 @@ class Example(object):
 
     @property
     def true_energy(self):
-        """
-        The energy stored in the example have been removed by the offset
-        """
         return self._true_energy
 
     @property
