@@ -214,7 +214,8 @@ These are the new sections and keywords we will use:
 
 #### [DEFAULT_NETWORK]
 
-* `networks_metadata` -- This indicates the `.json` file containing the structure of the network. 
+* `networks_metadata` -- This indicates the folder where the `networks_metadata.json` file containing the structure of the network is located. 
+
 Let us now use the network we have previously trained as the default network. 
 If we want to change something for a particular species, we can specify it in each atomic section.
 
@@ -253,7 +254,7 @@ All in all, this section of our input file will therefore look like this (see `t
 g_size = 384
 architecture = 128:32:1
 trainable = 1:1:1
-networks_metadata = saved_weights/networks_metadata.json
+networks_metadata = saved_weights
 [O]
 trainable = 0:0:0
 [C]

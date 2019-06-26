@@ -1,4 +1,7 @@
 (To be continued)
+
+FUNDING AGENCIES:
+EU - Horizon 2020 - grant No. 676531 (project E-CAM)
 --
 SISSA & CNR support:
 Stefano de Gironcoli
@@ -19,5 +22,5 @@ Testing & feedback:
 Duc-Long Nguyen, Academia Sinica, Taiwan
 Ivor Loncaric, Rudjer Boskovic Institute, Croatia
 Yun Wang, Griffith University, Australia
-
+--
 

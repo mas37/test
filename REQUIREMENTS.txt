@@ -1,4 +1,4 @@
-#python requirement ==3.5 
-tensorboard==1.8.0
-tensorflow==1.8.0
-numpy==1.13.3
+#python requirement ==3.6
+tensorboard >=1.10.0,<2.0.0
+tensorflow >=1.10.0,<2.0.0
+numpy >=1.15.0
