@@ -265,7 +265,11 @@ def main(gvect_func, folder_parameters, number_of_process):
                 logger.warning(
                     'WARNING: unit of energy unknown, assumed eV {}'.format(
                         key))
-
+            if type(example['energy'][0]) is str:
+                energy = example['energy'][0].strip('\"')
+            else:
+                energy = example['energy'][0]
+             
             # lattice info
             unit_of_length = example.get('unit_of_length', None)
             lattice_vectors = example.get('lattice_vectors', None)
@@ -340,7 +344,7 @@ def main(gvect_func, folder_parameters, number_of_process):
                 'lattice_vectors': lattice_vectors,
                 'number_of_species': number_of_species,
                 'symbols': species_symbols,
-                'E': float(example['energy'][0].strip('\"')) * unit2eV,
+                'E': float(energy) * unit2eV,
                 'n_atoms': len(example['atoms']),
                 'species_str_2idx': species_str_2idx,
                 'pbc': pbc_directions,
