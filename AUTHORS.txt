@@ -6,4 +6,8 @@ phiandark
 rlot
 yshaidu
 
+---
+
+Other contributors
+Qingjie Li - VASP parser
 

@@ -18,6 +18,10 @@ Efthimios Kaxiras
 ANI-1 dataset permission:
 Olexandr Isayev
 --
+KIM-API support
+Ryan S. Elliott
+Daniel Karls
+--
 Testing & feedback:
 Duc-Long Nguyen, Academia Sinica, Taiwan
 Ivor Loncaric, Rudjer Boskovic Institute, Croatia

@@ -208,7 +208,7 @@ def main(gvect_func, folder_parameters, number_of_process):
     if not os.path.exists(binary_out_dir):
         os.makedirs(binary_out_dir)
 
-    all_example_keys = [x.split('.')[0] for x in os.listdir(input_json_dir)]
+    all_example_keys = [x.split('.example')[0] for x in os.listdir(input_json_dir)]
 
     try:
         with open(os.path.join(log_dir, 'gvect_already_computed.dat')) as f:
@@ -340,7 +340,7 @@ def main(gvect_func, folder_parameters, number_of_process):
                 'lattice_vectors': lattice_vectors,
                 'number_of_species': number_of_species,
                 'symbols': species_symbols,
-                'E': example['energy'][0] * unit2eV,
+                'E': float(example['energy'][0].strip('\"')) * unit2eV,
                 'n_atoms': len(example['atoms']),
                 'species_str_2idx': species_str_2idx,
                 'pbc': pbc_directions,

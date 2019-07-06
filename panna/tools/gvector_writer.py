@@ -39,7 +39,7 @@ def main(source, navg, **kvargs):
         f = np.fromfile(single_file, dtype=np.float32)
         n_atoms = int(f[0])
         g_size = int(f[1])
-        en = f[2]
+        en = float(f[2])
         spec_size = n_atoms
         gvect_size = n_atoms * g_size
 
@@ -55,7 +55,7 @@ def main(source, navg, **kvargs):
         if navg == 0:
             outname = single_file + "_plain.dat"
             with open(outname, "w") as out:
-                out.write("# ")
+                out.write("# {} ".format(en))
                 np.savetxt(out, spec_tensor, fmt="%d", delimiter=" ")
                 np.savetxt(
                     out,

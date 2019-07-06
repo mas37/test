@@ -79,14 +79,16 @@ double PairPANNA::Gradial_d(double rdiff, int indr, double *dtmp){
 double PairPANNA::Gangular_d(double rdiff1, double rdiff2, double cosijk, int Rsi, int Thi, double* dtmp){
   if(cosijk> 0.999999999) cosijk =  0.999999999;
   if(cosijk<-0.999999999) cosijk = -0.999999999;
-  double sinijk = sqrt(1.0 - cosijk*cosijk);
+  double epscorr = 0.01;
+  double sinijk = sqrt(1.0 - cosijk*cosijk + epscorr * pow(par.Thi_sin[Thi], 2) );
   double iRij = 1.0/rdiff1;
   double iRik = 1.0/rdiff2;
   double Rcent = 0.5 * (rdiff1 + rdiff2) - par.Rsi_ang[Rsi];
   double fcrad = 0.5 * ( 1.0 + par.Thi_cos[Thi] * cosijk + par.Thi_sin[Thi] * sinijk );
   double fcij = 0.5 * ( 1.0 + cos(rdiff1 * par.iRc_ang) );
   double fcik = 0.5 * ( 1.0 + cos(rdiff2 * par.iRc_ang) );
-  double fact0 = 2.0 * exp( - par.eta_ang * Rcent * Rcent) * pow(fcrad, par.zeta-1);
+  double mod_norm = pow( 0.5 * (1.0 + sqrt(1.0 + epscorr * pow(par.Thi_sin[Thi], 2) ) ), par.zeta);
+  double fact0 = 2.0 * exp( - par.eta_ang * Rcent * Rcent) * pow(fcrad, par.zeta-1) / mod_norm;
   double fact1 = fact0 * fcij * fcik;
   double fact2 = par.zeta_half * fact1 * ( par.Thi_cos[Thi] - par.Thi_sin[Thi] * cosijk / sinijk );
   double fact3 = par.iRc_ang_half * fact0 * fcrad;

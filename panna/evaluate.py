@@ -287,19 +287,19 @@ def main(parameters):
 
         cks = [
             net.Checkpoint(
-                os.path.join(io_parameters.train_dir,
-                             x), data_parameters.atomic_sequence,
-                networks_kind, networks_metadata) for x in ck_files
+                path_file=os.path.join(io_parameters.train_dir, x),
+                species_list=data_parameters.atomic_sequence,
+                networks_kind=networks_kind,
+                networks_metadata=networks_metadata) for x in ck_files
         ]
 
         nns_tmp = []
         for x in cks:
             try:
                 scaf = x.get_scaffold
-                nn_tmp.append(scaf)
+                nns_tmp.append(scaf)
             except NotFoundError:
-                logger.warning('{} not found because of TF bug'.format(
-                    x.filename))
+                logger.warning('%s not found because of TF bug', x.filename)
 
         nns = []
         writers = []
@@ -310,7 +310,7 @@ def main(parameters):
             file_name = os.path.join(io_parameters.eval_dir,
                                      '{}.dat'.format(x))
             if os.path.isfile(file_name) and os.path.getsize(file_name) > 100:
-                logger.info('{} already computed'.format(file_name))
+                logger.info('%s already computed', file_name)
                 continue
 
             writers.append(
@@ -385,10 +385,10 @@ def main(parameters):
                 # if the validation dataset is too big can be useful
                 # to only randomly sample it
                 rnd.shuffle(dataset_files)
-                example_files = dataset_files[:batch_size]
+                example_files = dataset_files[:validation_parameters.batch_size]
                 logger.info('loading a subset of all the available '
                             'examples in the folder')
-                examples_parameters = [(x, data_prameters.n_species,
+                examples_parameters = [(x, data_parameters.n_species,
                                         validation_parameters.compute_forces)
                                        for x in example_files]
                 examples = pool.starmap(net.load_example, examples_parameters)
@@ -401,7 +401,7 @@ def main(parameters):
                         derivatives=validation_parameters.compute_forces):
                     examples.append(example)
 
-        if len(examples) == 0:
+        if not examples:
             logger.info('no example found')
             break
 
@@ -410,9 +410,8 @@ def main(parameters):
 
         if validation_parameters.compute_forces:
             Ef = pool.starmap(_eval_function_forces, parallel_feed)
-            for energy, forces in Ef:
-                string = '\n'.join([x[0] for x in Ef])
-                string2 = ''.join([x[1] for x in Ef])
+            string = '\n'.join([x[0] for x in Ef])
+            string2 = ''.join([x[1] for x in Ef])
         else:
             string = '\n'.join(pool.starmap(_eval_function, parallel_feed))
 

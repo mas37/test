@@ -210,19 +210,36 @@ def loss_NN(batch_energies, batch_energies_dft, batch_natoms,
         elif loss_func == "quad_atom":
             tot_loss = tf.reduce_sum(
                 tf.div(batch_delta_e2, tf.square(batch_natoms)),
-                name='1.LOSS-Delta_per_atom_E2')
+                name='1.LOSS-Delta_E2_div_Natom2')
+        elif loss_func == "quad_std_atom":
+            tot_loss = tf.reduce_sum(
+                tf.div(batch_delta_e2, batch_natoms),
+                name='1.LOSS-Delta_E2_div_Natom')
         elif loss_func == "exp_quad_atom":
             tot_loss = 0.5 * tf.exp(
                 2.0 * tf.reduce_sum(
                     tf.div(batch_delta_e2, tf.square(batch_natoms))),
-                name='1.LOSS-Exp_Delta_per_atom_E2')
+                name='1.LOSS-Exp_Delta_E2_div_Natom2')
+        elif loss_func == "exp_quad_std_atom":
+            tot_loss = 0.5 * tf.exp(
+                2.0 * tf.reduce_sum(
+                    tf.div(batch_delta_e2, batch_natoms)),
+                name='1.LOSS-Exp_Delta_E2_div_Natom')
         elif loss_func == "quad_exp_tanh_atom":
             a = tf.constant(5.0)
             red_sum = tf.div(
                 tf.reduce_sum(tf.div(batch_delta_e2, tf.square(batch_natoms))),
                 a)
             tot_loss = tf.add(tf.reduce_sum(batch_delta_e2), tf.exp(tf.multiply(a, tf.tanh(red_sum))), \
-                              name = '1.LOSS-quad_exp_tanh_peratom_Delta_E2')    
+                              name = '1.LOSS-quad_exp_tanh_Delta_E2_div_Natom2')
+        elif loss_func == "quad_exp_tanh_std_atom":            
+            a = tf.constant(5.0)
+            red_sum = tf.div(
+                tf.reduce_sum(tf.div(batch_delta_e2, batch_natoms)),
+                a)
+            tot_loss = tf.add(tf.reduce_sum(batch_delta_e2), tf.exp(tf.multiply(a, tf.tanh(red_sum))), \
+                              name = '1.LOSS-quad_exp_tanh_Delta_E2_div_Natom')
+    
         elif loss_func == "quad_exp_tanh":
             a = tf.constant(5.0)
             red_sum = tf.div( tf.reduce_sum(batch_delta_e2), a)
