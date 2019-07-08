@@ -43,7 +43,7 @@ def main(indir, outdir, addhash, **kvargs):
     #find QE outputs and process 
     for rt, dirs, files in os.walk(indir):
         for f in files:
-            print('file being processed {}'.format(f), flush=True) 
+            #print('file being processed {}'.format(f), flush=True) 
             #initialize json dictionary
             panna_json = dict()
             panna_json['atoms']=[]
@@ -97,7 +97,9 @@ def main(indir, outdir, addhash, **kvargs):
                 firstscf = data.split('End of self-consistent calculation')[1]
             else:
                 print(pwoutput, flush=True)
-                exit(1)
+                print("ERROR: NO SCF CALC WAS PERFORMED", flush=True)
+                #exit(1)
+                continue
             data_lines =  firstscf.split('\n')
             for num, line in enumerate( data_lines ):
                 if '!    total energy' in line:
@@ -154,7 +156,7 @@ def main(indir, outdir, addhash, **kvargs):
             if 'number of bfgs steps' in data:
                 lrelax=True #automatically lforces is also true
                 relaxsteps = data.split('number of bfgs steps')[1:]
-                print('There are {}  BFGS calculations'.format(len(relaxsteps)), flush=True )
+                #print('There are {}  BFGS calculations'.format(len(relaxsteps)), flush=True )
                 rlx_ind = 0
                 # Here, the remaining file is split into BFGS steps,
                 # so if more than one SCF calculation was done for a given SCF step
