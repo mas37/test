@@ -14,7 +14,7 @@
 #The following is assumed on how the units are displayed during relaxation: 
 # 
 # CELL_PARAMETERS (bohr)
-# ATOMIC_POSITIONS (crystal) 
+# ATOMIC_POSITIONS (crystal) or ATOMIC_POSITIONS (bohr) 
 #
 #
 import os, sys
@@ -125,7 +125,7 @@ def main(indir, outdir, addhash, **kvargs):
             panna_json['atomic_position_unit']='cartesian'            
             panna_json['unit_of_length']='bohr'
             panna_json['lattice_vectors'] = lat_list
-            panna_json['energy'] = (etot,unit_of_energy)
+            panna_json['energy'] = (float(etot),unit_of_energy)
             if lforces : 
                 for at in range(nat):
                     panna_json['atoms'].append( [at+1, symbol_list[at], pos_list[at][:], 
@@ -159,8 +159,12 @@ def main(indir, outdir, addhash, **kvargs):
                 #print('There are {}  BFGS calculations'.format(len(relaxsteps)), flush=True )
                 rlx_ind = 0
                 # Here, the remaining file is split into BFGS steps,
-                # so if more than one SCF calculation was done for a given SCF step
-                # only the last one is stored as a result of the following routine:
+                # If bfgs is converged, the last positions are equal to 'final coordinates'
+                # hence it is ok to use this keyword to split. 
+                # And for the final scf done at the final coordinates:
+                # is it was successfully completed, the energy stored for the final coord. is that one,
+                # is the calc died before that was finished, the last energy from bfgs is used.
+                # 
                 for step in relaxsteps:
                     panna_json['atoms'] = []
                     rlx_ind += 1
@@ -191,8 +195,12 @@ def main(indir, outdir, addhash, **kvargs):
                                        for ii in range(3): 
                                            pos[at][kk] += float(pos_list[at][ii]) * float(lat_list[ii][kk])
                            
+                           elif pos_unit == 'bohr' :
+                               pos = [ [0.0,0.0,0.0] for at in range(nat)]
+                               pos = [ [float(pos_list[at][i]) for i in range(3)] for at in range(nat)]
                            else : 
                                exit(2)
+                               
                         elif '!    total energy' in line:
                            etot = line.split()[4]
                            #print('Total energy for this scf run {}'.format(etot), flush=True)
@@ -212,7 +220,7 @@ def main(indir, outdir, addhash, **kvargs):
                            #print('Stress in Ry/b^3 {}'.format(stress_list), flush=True)
                     #
                     panna_json['lattice_vectors'] = lat_list
-                    panna_json['energy'] = (etot,unit_of_energy)
+                    panna_json['energy'] = (float(etot),unit_of_energy)
                     for at in  range(nat):
                         panna_json['atoms'].append( [at+1, symbol_list[at], pos[at][:],
                                              forces_list[at][:] ] )     
