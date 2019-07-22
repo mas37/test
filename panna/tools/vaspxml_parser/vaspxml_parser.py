@@ -4,25 +4,74 @@ import os, gzip
 import json
 import argparse
 
-def choose_configs(filename, offset, skip):
+
+def main(xml_file, offset, skip, outdir):
+    """
+    parse vasprun.xml and write relevant info into  panna json.
+
+    xml_file: vasprun.xml file to be parsed
+    offset: skip the first 'offset' configurations
+    skip: choose configurations every 'skip' steps
+    outdir: output directory for panna json files
+    """
+
+    if os.path.isdir(outdir):
+       outdir = os.path.abspath(outdir)
+    else:
+       os.mkdir(outdir)
+       outdir = os.path.abspath(outdir)
+
+    stream  = StringIO(choose_configs(xml_file, offset, skip))
+    panna_json_name = xml_file.split('.xml')[0].split('/')[-1]
+
+    #xml_file_path = os.path.abspath(xml_file)
+    #print("---> Parsing {} ...".format(xml_file_path))
+    #print("---> Panna json files will be written to \n     {}".format(outdir))
+
+    try:
+        i = 1
+        for event, elem in ET.iterparse(stream):
+            tag = elem.tag
+            if tag == "atominfo":
+                atom_species = parse_atom_species(elem)
+            elif tag == "varray" and elem.attrib["name"] == "primitive_index":
+                atom_indices = [int(v.text.strip()) for v in elem.findall("v")]
+            elif tag == "calculation":
+                cell_vectors, atom_positions, \
+                        total_energy, atom_forces = parse_calculation(elem)
+                atoms_info = [list(i) for i in 
+                             zip(atom_indices, atom_species, 
+                                 atom_positions, atom_forces)]
+                write_to_panna_json(xml_file, 
+                                    cell_vectors, total_energy, 
+                                    atoms_info, outdir.rstrip('/')+"/"+
+                                    panna_json_name+"_"+
+                                    str(i).zfill(6)+".example")
+                i = i+1
+            else:
+                pass
+    except ET.ParseError as err:
+        raise err
+
+
+def choose_configs(xml_file, offset, skip):
     """
         Clean up the input xml file and 
         choose desired configurations.
         
-        parameters:
-          filename - the vasprun.xml file (can be .gz file)
-          offset - skip the first "offset" configurations
-          skip - choose configurations every "skip" steps
+        xml_file: the vasprun.xml file (can be .gz file)
+        offset: skip the first "offset" configurations
+        skip: choose configurations every "skip" steps
         
         return:
-          a xml format string containing 
-          the chosen configurations
+         a xml format string containing 
+         the chosen configurations
     """
-    
-    if filename.split(".")[-1].lower() == "gz":
-        f = gzip.open(filename,'rt')
+
+    if xml_file.split(".")[-1].lower() == "gz":
+        f = gzip.open(xml_file,'rt')
     else:
-        f = open(filename)
+        f = open(xml_file)
         
     run = f.read()
     all_configs = run.split("<calculation>")
@@ -38,7 +87,7 @@ def choose_configs(filename, offset, skip):
         index = lines.index(" </calculation>")
         all_configs[-1] = "\n".join(lines[:index+1])
     else:
-        print("the last config is not complete, thus is deleted!")
+        print("---> The last configuration is not complete, thus is deleted!")
         del all_configs[-1]
 
     # choose uncorrelated configurations
@@ -117,64 +166,31 @@ def parse_calculation(elem):
 
 
 
-def write_to_panna_json(cell_vectors, total_energy, 
+def write_to_panna_json(xml_file, cell_vectors, total_energy, 
                         atoms_info, output_filename):
     """
         write the parsed info into panna_json files.
         
+        xml_file: vasprun.xml file name
         cell_vectors: lattice vectors 
         total_energy: total energy of the current config
         atoms_info: contain atomic species, indices, atomic positions and atomic forces
         output_filename: panna_json file name to be written
     """
 
+    xml_file_path = os.path.abspath(xml_file)
+    key = xml_file.split('.xml')[0].split('/')[-1]
     panna_json = dict()
-    panna_json['atomic_position_unit'] = 'direct'
+    panna_json['atomic_position_unit'] = 'crystal'
     panna_json['lattice_vectors'] = cell_vectors
     panna_json['energy'] = [total_energy, "eV"]
     panna_json['atoms'] = atoms_info
-    panna_json['source'] = "/path/to/the/vasprun.xml/file"
-    panna_json['key'] = 'somekey'
-    panna_json['unit_of_length'] = 'Angstrom'
+    panna_json['source'] = xml_file_path
+    panna_json['key'] = key
+    panna_json['unit_of_length'] = 'angstrom'
     
     with open(output_filename,'w') as outfile:
         json.dump(panna_json, outfile)
-
-
-
-def main(filename, offset, skip, outdir):
-    if os.path.isdir(outdir):
-       outdir = os.path.abspath(outdir)
-       print(outdir)
-    else:
-       os.mkdir(outdir)
-       outdir = os.path.abspath(outdir)
-       print(outdir)
-
-    stream = StringIO(choose_configs(filename, offset, skip))
-
-    try:
-        i = 1
-        for event, elem in ET.iterparse(stream):
-            tag = elem.tag
-            if tag == "atominfo":
-                atom_species = parse_atom_species(elem)
-            elif tag == "varray" and                  elem.attrib["name"] == "primitive_index":
-                atom_indices = [int(v.text.strip()) for v in elem.findall("v")]
-            elif tag == "calculation":
-                cell_vectors, atom_positions, total_energy, atom_forces = parse_calculation(elem)
-                atoms_info = [list(i) for i in 
-                             zip(atom_indices, atom_species, 
-                                 atom_positions, atom_forces)]
-                write_to_panna_json(cell_vectors, total_energy, atoms_info,
-                                    outdir.rstrip('/')+"/"+
-                                    "panna_json_file_"+str(i)+".example")
-                i = i+1
-            else:
-                pass
-    except ET.ParseError as err:
-        raise err
-
 
 
 if __name__ == '__main__':
