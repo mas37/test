@@ -26,5 +26,6 @@ Testing & feedback:
 Duc-Long Nguyen, Academia Sinica, Taiwan
 Ivor Loncaric, Rudjer Boskovic Institute, Croatia
 Yun Wang, Griffith University, Australia
+Qingjie Li, MIT, USA
 --
 
