@@ -34,6 +34,7 @@ def main(xml_file, offset, skip, outdir):
             tag = elem.tag
             if tag == "atominfo":
                 atom_species = parse_atom_species(elem)
+                atom_indices = range(1,len(atom_species)+1)
             elif tag == "varray" and elem.attrib["name"] == "primitive_index":
                 atom_indices = [int(v.text.strip()) for v in elem.findall("v")]
             elif tag == "calculation":
