@@ -90,14 +90,15 @@ python3 ../../panna/train.py --config input_files/train1.ini
 The run should take from a few seconds to a few minutes, depending on your machine.
 The error with respect to target energy is written in `delta_e.dat` file at every `log_frequency` steps, for every element of the mini batch.
 The mean error, mean absolute error, and standard deviation of error is written in `delta_e_std.dat`.
+A copy of the code output is also saved in a `.log` file.
 The more detailed results about the network can be inspected by using tensorboard, the data visualizer of TensorFlow.
 To start tensorboard you should set the `logdir` argument of tensorboard to the `train_dir` of PANNA, e.g.:
 ```
 tensorboard --logdir=./tutorial_train --host=0.0.0.0 --port=6006
 ```
 
-These are the default host and ports of tensorboard, we could choose other addresses. 
-With this comment, we can visit the address above in a browser, now used by tensorboard to visually inspect our training.
+(where the host address and port utilized can be chosen by the user).
+While this command is running, we can visit the address above in a browser to visually inspect our training.
 
 Initially let us concentrate on a few aspects: in the `SCALARS` tab, we first see the evolution of loss function
 and evolution of error (Delta E) during the training. They should both rapidly decrease as the training starts. 
@@ -130,8 +131,9 @@ As long as the `train_dir` variable is the same as before, the code keeps track 
 That way when you run the same command, the training will seamlessly resume,
 and stop at the new `max_steps` steps. **Important** the delta_e.dat and delta_e_std.dat files will be overwritten. 
 Try increasing the max_steps to 5000 (4000 more steps) and see whether you obtain lower error.
-In our reference calculation, the std error reduced to 0.03eV while due to the small batch size while fluctuations are present.
+In our reference calculation, the std error reduced to 0.03eV while due to the small batch size fluctuations are present.
 
+---
 ### Validation
 
 The errors we examined so far are with respect to the training data.
@@ -147,10 +149,10 @@ Specifies the input and output folders:
 * `train_dir` -- The folder containing the output of the previous training to launch the trained network.
 * `eval_dir` -- The folder that will contain the results of the network evaluation.
 
-##### [DATA_INFORMATION]
-As the input for train.py (see above for details), this section specifies
-the parameters about the descriptor functions we have employed to create the input.
-Do not change this part if you are using the pre-prepared data files that come with this tutorial.
+##### [TFR_STRUCTURE]
+Here we need to specify some characteristics of the data inputs for validation. For the basic case of this tutorial, it is sufficient to specify the following:
+
+* `g_size` -- The length of atomic input array
 
 ##### [VALIDATION_OPTIONS]
 There are a few options on how to compute the validation. For tutorial purposes we will only specify the following
@@ -180,13 +182,7 @@ this code will take a checkpoint and generate two output files per layer per spe
 one with the weights and one with the biases. 
 It will also generate a `.json` file specifying the structure of the network in human-readable format.
 
-This code requires its own input file with the following options:
-train_dir = ./tutorial_train
-step_number = 5000
-output_dir = ./saved_weights
-output_type = PANNA
-train_input = ./input_files/train1.ini
-gvector_input = ./input_files/gvect_ref.ini
+A simple input file for this code uses the following keywords:
 ##### [IO_INFORMATION]
 * `train_dir` -- The training directory, containing the checkpoints.
 * `output_dir` -- The name of the directory where the network will be saved.
@@ -200,7 +196,8 @@ If we used the tutorial inputs, we can save the network by running:
 ```
 python3 ../../panna/extract_weights.py --config input_files/extract_weights.ini
 ```
-a new folder (`saved_weights` in this case) will be created containing the network structure as `networks_metadata.json` and one `.npy` file for the weights and biases of each layer. 
+(this will by default save the weights of step 1000, please change the `step_number` variable if you have trained your network for longer).
+A new folder (`saved_weights` in this case) will be created containing the network structure as `networks_metadata.json` and one `.npy` file for the weights and biases of each layer. 
 These files are simply numpy arrays containing the vector or matrix in question, should one need to access them to import the parameters directly to another program.
 
 ---
@@ -224,7 +221,7 @@ Where `X` is an element type as specified in the `atomic_sequence`, eg. [H].
 
 * `architecture` -- Behaves like the same tag in `[DEFAULT_NETWORK]`. Only needs to be specified if we want to change the architecture for this specific element.
 * `trainable` -- Behaves like the same tag in `[DEFAULT_NETWORK]`. Only needs to be specified if we want to change the trainable flag for this specific element.
-* `behavior` -- A colon separated string specifying where to get the weights for each layer, e.g. `load:new:new`. Accepts keywords `new` (start from random weights), `load` (load from file, see later), `keep` (keep all information from the last checkpoint) and `keep_wb` (keep the values from the last checkpoint, but with some other changes). 
+* `behavior` -- A colon separated string specifying where to get the weights for each layer, e.g. `load:new:new`. Accepts keywords `new` (start from random weights), `load` (load from file, see later), `keep` (keep the weights from the last checkpoint). 
 * `layerX_w_file` -- Indicates the file to load the starting weights for layer number `X` (0 based index) of this species network. 
 Only needs to be specified if different from the default network (in this case, what we are importing from the previous training session), 
 and needs to be of the appropriate size.
@@ -264,7 +261,7 @@ layer0_b_file = saved_weights/species_O_layer_0_biases_128.npy
 [H]
 architecture = 128:32:32:1
 trainable = 1:1:1:1
-behavior = keep_wb:new:new:new
+behavior = keep:new:new:new
 ```
 
 As we can see we have complete control on the geometry and starting state of our network. 
@@ -344,6 +341,24 @@ two other keywords in the `[IO_INFORMATION]` section can help get better control
 * `tensorboard_log_frequency` -- Specifies the frequency (in steps) 
 for saving points for tensorboard visualization (if missing defaults to `log_frequency` value).
 * `max_ckpt_to_keep` -- Specifies a maximum number of checkpoints to be saved, after which the oldest ones will be deleted.
+
+---
+### Training with forces
+If force data are available for the input simulations and the derivatives of the descriptors have been precalculated, it is possible to modify the training loss so that forces are predicted and compared to the reference to drive the weights optimization.
+The first step to achieve this is to compute and pack the derivatives of the descriptors, as described in Tutorial 2. We will here assume that the input TFR contain the desired derivatives and to begin with we will consider them to be stored in the dense format (default).
+
+To perform a training with forces cost, it is sufficient to specify a `forces_cost` different from 0 in the [TRAINING_PARAMETERS] card of the input file.
+Please notice that forces training tends to take more time and memory per step than normal energy training, but each step contains much more information, so that training parameters will have to be reoptimized.
+
+To calculate forces in validation, it is only necessary to have precalculated the descriptors derivatives. To compute forces in validation, simply add the key `compute_forces = True` to the [VALIDATION_OPTIONS] card.
+A new output file for each checkpoint with postfix `_forces.dat` will be created, containing for each example and atom one line with predicted forces (x, y, z) and, if available, reference forces.
+
+#### Sparse derivatives
+If the simulations consist of cells much larger than the cutoff, or of a lot of species, it might be beneficial to store the descriptors derivatives in a sparse format. The procedure to obtain this is specified in Tutorial 2, we will here list the keywords needed to benefit from this structure.
+
+In training, besides the aforementioned `forces_cost`, the keyword `sparse_derivatives = True` will have to be added to the [DATA_INFORMATION] card.
+
+Similarly in validation, besided requiring forces, the keyword `sparse_derivatives = True` will have to be added to the [TFR_STRUCTURE] card.
 
 ---
 ###REFERENCES

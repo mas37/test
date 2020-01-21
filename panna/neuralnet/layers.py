@@ -5,20 +5,13 @@
 # The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
 # For further information on the license, see the LICENSE.txt file        #
 ###########################################################################
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 from tensorflow.python.framework import ops
 
-if __name__ == 'layers':
-    from variable_helpers import _variable_on_cpu
-    from variable_helpers import _variable_random_uniform
-else:
-    from neuralnet.variable_helpers import _variable_on_cpu
-    from neuralnet.variable_helpers import _variable_random_uniform
+from lib.errors import ShapeError
 
-
-class ShapeError(ValueError):
-    pass
+from .variable_helpers import _variable_on_cpu, _variable_random_uniform
 
 
 class Layer():
@@ -42,7 +35,7 @@ class Layer():
             - 0:: linear
             - 1:: Gaussian
             - 2:: rbf
-                  o_i = \exp(-\sum_{j=0}^{in_size}(in_j - w_i)^2)
+                  o_i = \\exp(-\\sum_{j=0}^{in_size}(in_j - w_i)^2)
                   basically each neuron represent a basis element
                   (Gaussian centered around w)
             - 3:: relu
@@ -56,13 +49,6 @@ class Layer():
         if not provided the layer can not be evaluated and it will be
         randomly initialized if required in TF
     """
-
-    _reg_exp = {
-        'layer': r'layer_(\d+)',
-        'weights': r'weights',
-        'biases': r'biases'
-    }  # quantity used to recover tensors from TF checkpoint
-
     def __init__(self,
                  wb_shape,
                  trainable,
@@ -207,101 +193,96 @@ class Layer():
 
         elif self.activation == 2:
             tmp = np.tile(np.expand_dims(in_vectors, -1), self.wb_shape[1])
-            tmp = (tmp - self._w_value)**2
-            tmp = np.sum(tmp, 1)
-            act = np.exp(-tmp)
+            tmp = tmp - self._w_value
+            act = np.exp(-np.sum(tmp**2, 1))
             if din_vectors.size > 0:
-                raise ValueError('derivative not implemented')
+                d_act = - 2.0 * np.reshape(act,
+                    (in_vectors.shape[0], 1, self.wb_shape[1])) * \
+                    np.matmul(din_vectors, tmp)
         elif self.activation == 3:
             tmp = np.matmul(in_vectors, self._w_value) + self._b_value
             act = np.maximum(0, tmp)
             if din_vectors.size > 0:
-                raise ValueError('derivative not implemented')
+                tmp2 = np.matmul(din_vectors, self._w_value)
+                d_act = np.reshape(
+                    np.where(tmp > 0.0, 1.0, 0.0),
+                    (in_vectors.shape[0], 1, self.wb_shape[1])) * tmp2
         else:
             raise ValueError('activation function not implemented')
         if din_vectors.size > 0:
             return act, d_act
         return act
 
-    @classmethod
-    def regexps(cls):
-        """ regexps for TF checkpoint
+    def tf_evaluate(self, in_tensor):
+        """Define an all to all connected layer with species division.
 
-        Return
-        ------
-        list of string with regexps to search for the layer inside
-        TF checkpoint
+        Parameters
+        ----------
+        in_tensor: input to be computed, (n_atoms of this species x in_size)
+
+        Returns
+        -------
+        Output of the layer
         """
-        return [
-            cls._reg_exp['layer'] + '/' + cls._reg_exp['weights'],
-            cls._reg_exp['layer'] + '/' + cls._reg_exp['biases']
-        ]
+        dist_parameter = 1.0 / self.b_shape[0]
 
+        if self.w_value.size > 0:
+            weights = _variable_on_cpu('weights',
+                                       self.wb_shape,
+                                       tf.constant_initializer(self.w_value),
+                                       trainable=self.trainable)
+        else:
+            weights = _variable_random_uniform('weights',
+                                               self.wb_shape,
+                                               dist_parameter,
+                                               trainable=self.trainable)
 
-def hidden_layer(in_tensor,
-                 in_size,
-                 out_size,
-                 trainable,
-                 activation,
-                 init_values=(None, None)):
-    """Define an all to all connected layer with species division and
-       Gaussian activation function.
+        if self.b_value.size > 0:
+            biases_init = tf.constant_initializer(self.b_value)
+        else:
+            biases_init = tf.constant_initializer(0.0)
 
-    Args:
-      in_tensor: input to be computed, (n_atoms of this species x in_size)
-      in_size: last dimension of the input,
-      out_size: last dimension of the output,
-      trainable: whether we should train these weights
-      activation: kind of activation
-       - 0:: linear
-       - 1:: gaussian
-       - 2:: rbf
-       - 3:: relu
+        biases = _variable_on_cpu('biases',
+                                  self.b_shape,
+                                  biases_init,
+                                  trainable=self.trainable)
 
-      init_values: numpy arrays to initialize the tensors, weights and biases
-                   None = default initialization
+        tf.add_to_collection(ops.GraphKeys.WEIGHTS, weights)
+        tf.add_to_collection(ops.GraphKeys.BIASES, biases)
 
-    Return:
-      Output of the layer
+        if self.activation == 1:  # gaussian
+            w_contrib = tf.matmul(in_tensor, weights,
+                                  name='w_contrib') + biases
+            exp_arg = tf.square(w_contrib, name='exp_arg')
+            output = tf.exp(tf.negative(exp_arg), name='activation')
+        elif self.activation == 2:  # rbf
+            reshaped_in = tf.tile(tf.expand_dims(in_tensor, -1),
+                                  [1, 1, self.b_shape[0]])
+            w_contrib = tf.subtract(reshaped_in, weights, name='w_contrib')
+            exp_arg = tf.reduce_sum(tf.square(w_contrib, name='exp_arg'), 1)
+            output = tf.exp(tf.negative(exp_arg), name='activation')
+        elif self.activation == 3:  # relu
+            w_contrib = tf.matmul(in_tensor, weights,
+                                  name='w_contrib') + biases
+            output = tf.nn.relu(w_contrib, name='my_relu')
+        elif self.activation == 4:  # tanh
+            w_contrib = tf.matmul(in_tensor, weights,
+                                  name='w_contrib') + biases
+            output = tf.nn.tanh(w_contrib, name='activation')
+        elif self.activation == 0:  # linear
+            w_contrib = tf.matmul(in_tensor, weights, name='w_contrib')
+            output = tf.add(w_contrib, biases, name='activation')
+        else:
+            raise ValueError('activation not implemented', self.activation)
 
-    weights variable will be named "weights"
-    bias variable will be named "bias"
-    """
-    dist_parameter = 1.0 / out_size
-    if isinstance(init_values[0], np.ndarray):
-        weights = _variable_on_cpu(
-            'weights', [in_size, out_size],
-            tf.constant_initializer(init_values[0]),
-            trainable=trainable)
-    else:
-        weights = _variable_random_uniform(
-            'weights', [in_size, out_size],
-            dist_parameter,
-            trainable=trainable)
+        return output
 
-    biases_init = tf.constant_initializer(init_values[1]) if isinstance(
-        init_values[1], np.ndarray) else tf.constant_initializer(0.0)
-    biases = _variable_on_cpu(
-        'biases', [out_size], biases_init, trainable=trainable)
+    @property
+    def tf_ckpt_elements(self):
+        names = ['weights', 'biases']
+        objects = None
+        return names, objects
 
-    tf.add_to_collection(ops.GraphKeys.WEIGHTS, weights)
-    tf.add_to_collection(ops.GraphKeys.BIASES, biases)
-
-    if activation == 1:  #gaussian
-        w_contrib = tf.matmul(in_tensor, weights, name='w_contrib') + biases
-        exp_arg = tf.square(w_contrib, name='exp_arg')
-        output = tf.exp(tf.negative(exp_arg), name='activation')
-    elif activation == 2:  #rbf
-        reshaped_in = tf.tile(tf.expand_dims(in_tensor, -1), [1, 1, out_size])
-        w_contrib = tf.subtract(reshaped_in, weights, name='w_contrib')
-        exp_arg = tf.reduce_sum(tf.square(w_contrib, name='exp_arg'), 1)
-        output = tf.exp(tf.negative(exp_arg), name='activation')
-    elif activation == 3:  #relu
-        w_contrib = tf.matmul(in_tensor, weights, name='w_contrib') + biases
-        #TODO: test -not sure if this works yet
-        output = tf.nn.relu(w_contrib, name='my_relu')
-    elif activation == 0:  #linear
-        w_contrib = tf.matmul(in_tensor, weights, name='w_contrib')
-        output = tf.add(w_contrib, biases, name='activation')
-
-    return output
+    @tf_ckpt_elements.setter
+    def tf_ckpt_elements(self, value):
+        self.w_value, self.b_value = value

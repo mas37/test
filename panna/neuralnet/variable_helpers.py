@@ -21,9 +21,11 @@ def _variable_on_cpu(name, shape, initializer, trainable=True):
     """
     with tf.device('/cpu:0'):
         dtype = tf.float32
-        var = tf.get_variable(name=name, shape=shape,
-                              initializer=initializer, dtype=dtype,
-                              trainable=trainable)
+        var = tf.get_variable(name=name,
+                                        shape=shape,
+                                        initializer=initializer,
+                                        dtype=dtype,
+                                        trainable=trainable)
     return var
 
 
@@ -36,6 +38,5 @@ def _variable_random_uniform(name, shape, limit, trainable=True):
                            tf.random_uniform_initializer(minval=-limit,
                                                          maxval=limit,
                                                          dtype=dtype),
-                           trainable=trainable
-                           )
+                           trainable=trainable)
     return var

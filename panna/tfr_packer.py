@@ -5,46 +5,37 @@
 # The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
 # For further information on the license, see the LICENSE.txt file        #
 ###########################################################################
-import os
 import argparse
 import configparser
-import numpy as np
 import logging
+import os
+
+import numpy as np
 
 import gvector
 import neuralnet
+from lib import init_logging
 
 # logger
-logger = logging.getLogger('logfile')
-formatter = logging.Formatter('%(asctime)s - %(name)s - \
-    %(levelname)s - %(message)s')
-
-# console handler
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+logger = logging.getLogger('panna')
 
 
 def parser_file(conf_file):
     """parser file
 
-    Args:
-      in_path: path to the directory to be compressed
-      out_path: path to the save directory
-      elements_per_file: number of element for each tfrecord file
-      n_atoms: simulation info: number of atoms in each file
-      num_species: simulation info: number of species
-      g_size: simulation info: size of g-vector
-
-      prefix: an extra prefix, optional, it is added in front of the file_name
+    in_path: path to the directory to be compressed
+    out_path: path to the save directory
+    elements_per_file: number of element for each tfrecord file
+    n_atoms: simulation info: number of atoms in each file
+    num_species: simulation info: number of species
+    g_size: simulation info: size of g-vector
+    prefix: an extra prefix, optional, it is added in front of the file_name
               eg: train for the training set
-
-    Return:
-      None
 
     IMPORTANT:
       In the in_path there must be ONLY files that are binary representation
       of already calculated g-vector
+
     """
     config = configparser.ConfigParser()
     config.read(conf_file)
@@ -63,6 +54,10 @@ def parser_file(conf_file):
     gv_param = config['CONTENT_INFORMATION']
     parameters.num_species = gv_param.getint('n_species', None)
     parameters.derivatives = gv_param.getboolean('include_derivatives', False)
+    parameters.sparse_derivatives = gv_param.getboolean(
+        'sparse_derivatives', False)
+    parameters.per_atom_quantity = gv_param.getboolean(
+        'include_per_atom_quantity', False)
 
     return parameters
 
@@ -71,55 +66,67 @@ def main(parameters):
     """Package all the gvector in a folder to tfrecord files
     """
 
-    in_path = parameters.in_path
-    out_path = parameters.out_path
-    elements_per_file = parameters.elements_per_file
-    prefix = parameters.prefix
-    num_species = parameters.num_species
-    derivatives = parameters.derivatives
+    all_example_names = []
+    for file in os.listdir(parameters.in_path):
+        name, ext = os.path.splitext(file)
+        if ext=='.bin':
+            all_example_names.append(file)
+    if len(all_example_names)==0:
+        logger.info('No example found. Stopping')
+        exit(1)
+    files = [
+        os.path.join(parameters.in_path, x)
+        for x in all_example_names
+    ]
+    n_files = int(np.ceil(len(files) / parameters.elements_per_file))
 
-    f = [os.path.join(in_path, x) for x in os.listdir(in_path)]
-    n_files = int(np.ceil(len(f) / elements_per_file))
-    f = [
-        f[i * elements_per_file:(i + 1) * elements_per_file]
-        for i in range(n_files)
+    # divided files in subsets, each set is a new tfr file
+    files = [
+        files[i * parameters.elements_per_file:(i + 1) *
+              parameters.elements_per_file] for i in range(n_files)
     ]
 
-    if not os.path.exists(out_path):
-        os.makedirs(out_path)
+    if not os.path.exists(parameters.out_path):
+        os.makedirs(parameters.out_path)
 
-    if prefix != '':
-        file_pattern = prefix + '-{}-{}'
+    if parameters.prefix != '':
+        file_pattern = parameters.prefix + '-{}-{}'
     else:
         file_pattern = '{}-{}'
 
-    n_files = len(f)
-    for i, s in enumerate(f):
-        logger.info('file {}/{}'.format(i + 1, n_files))
+    n_tfrs = len(files)
 
-        filename = file_pattern.format(i + 1, n_files)
-        target_file = os.path.join(out_path, '{}.tfrecord'.format(filename))
+    for idx, tfr_elements in enumerate(files):
+        logger.info('file %d/%d', idx + 1, n_tfrs)
+
+        filename = file_pattern.format(idx + 1, n_tfrs)
+        target_file = os.path.join(parameters.out_path,
+                                   '{}.tfrecord'.format(filename))
 
         if os.path.isfile(target_file) and (os.path.getsize(target_file) > 0):
             logger.info('file already computed')
             continue
 
-        gvector.writer(
-            filename=filename,
-            path=out_path,
-            data=[
-                gvector.example_tf_packer(
-                    neuralnet.load_example(
-                        x, num_species, derivatives=derivatives), derivatives)
-                for x in s
-            ])
+        payload = [
+            gvector.example_tf_packer(neuralnet.load_example(x),
+                                      parameters.derivatives,
+                                      parameters.sparse_derivatives,
+                                      parameters.per_atom_quantity)
+            for x in tfr_elements
+        ]
+        gvector.writer(filename=filename,
+                       path=parameters.out_path,
+                       data=payload)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='TFR packer')
-    parser.add_argument(
-        '-c', '--config', type=str, help='config file', required=True)
-    args = parser.parse_args()
-    logger.setLevel(logging.INFO)
-    parameters = parser_file(args.config)
-    main(parameters)
+    init_logging()
+    PARSER = argparse.ArgumentParser(description='TFR packer')
+    PARSER.add_argument('-c',
+                        '--config',
+                        type=str,
+                        help='config file',
+                        required=True)
+    ARGS = PARSER.parse_args()
+    PARAMETERS = parser_file(ARGS.config)
+    main(PARAMETERS)

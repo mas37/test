@@ -8,12 +8,10 @@
 from __future__ import absolute_import, division, print_function
 
 import argparse
-import configparser
 import logging as or_logging
 import os
 import time
-from functools import partial
-from itertools import zip_longest
+import json
 
 import numpy as np
 import tensorflow as tf
@@ -22,24 +20,26 @@ from tensorflow.python.ops import control_flow_ops, resources, variables
 from tensorflow.python.platform import tf_logging as logging
 
 import neuralnet as net
-from neuralnet.constants import A2BOHR
 from neuralnet import parameter_file_parser
 
 
-def tf_version_tuple(v):
-    return tuple(map(int, (v.split('.'))))
+def tf_version_tuple(version):
+    "version getter fro TF"
+    return tuple(map(int, (version.split('.'))))
 
 
-# Small snipped to mange the log
+# Small snipped to manage the log
+import absl.logging
+or_logging.root.removeHandler(absl.logging._absl_handler)
+absl.logging._warn_preinit_stderr = False
 if tf_version_tuple(tf.__version__) < tf_version_tuple('1.13.0'):
-    logging.info('TF 1.12.X Logger is used')
     tf_logger = logging._get_logger()
+    tf_logger.info('TF 1.12.X Logger is used')
 else:
-    tf_logger = tf.get_logger()
-    logging.info('TF 1.13.X Logger is used')
+    tf_logger = tf.get_logger()  #pylint: disable=no-member
+    tf_logger.info('TF 1.13.X Logger is used')
 
 # Small snipped to mange the log
-#tf_logger = logging._get_logger()
 formatter = or_logging.Formatter('%(levelname)s - %(message)s')
 tf_logger.handlers = []
 
@@ -66,175 +66,75 @@ def _splash_screen(emitter):
 
 def _graph_builder(parameters):
     # split parameters in subinstance
-    (io_parameters, parallelization_parameters, train_parameters,
-     parameters_container, system_scaffold) = parameters
-
-    # ===compatibility layer with old variable naming===
-    # TODO: remove this part
-    # train generic:
-    batch_size = train_parameters.batch_size
-    learning_rate = train_parameters.learning_rate
-    learning_rate_constant = train_parameters.learning_rate_constant
-    learning_rate_decay_factor = train_parameters.learning_rate_decay_factor
-    learning_rate_decay_step = train_parameters.learning_rate_decay_step
-    beta1 = train_parameters.beta1
-    beta2 = train_parameters.beta2
-    adam_eps = train_parameters.adam_eps
-    max_steps = train_parameters.max_steps
-    wscale_l1 = train_parameters.wscale_l1
-    wscale_l2 = train_parameters.wscale_l2
-    bscale_l1 = train_parameters.bscale_l1
-    bscale_l2 = train_parameters.bscale_l2
-    forces_cost = train_parameters.forces_cost
-    clip_value = train_parameters.clip_value
-    loss_func = train_parameters.loss_func
-    floss_func = train_parameters.floss_func
-    train_on_forces = train_parameters.train_on_forces
-
-    # parallelization:
-    num_parallel_readers = parallelization_parameters.num_parallel_readers
-    num_parallel_calls = parallelization_parameters.num_parallel_calls
-    shuffle_buffer_size_multiplier = \
-                  parallelization_parameters.shuffle_buffer_size_multiplier
-    prefetch_buffer_size_multiplier = \
-                  parallelization_parameters.prefetch_buffer_size_multiplier
-    inter_op_parallelism_threads = \
-                  parallelization_parameters.inter_op_parallelism_threads
-    intra_op_parallelism_threads = \
-                  parallelization_parameters.intra_op_parallelism_threads
-    dataset_cache = parallelization_parameters.dataset_cache
-
-    # without category
-    en_rescale = parameters_container.en_rescale
-
-    # relevant network
-    layers_sizes = system_scaffold.old_layers_sizes
-    layers_trainable = system_scaffold.old_layers_trainable
-    layers_act = system_scaffold.old_layers_act
-    g_size = system_scaffold.old_gsize
-    n_species = system_scaffold.n_species
-    atomic_sequence = system_scaffold.atomic_sequence
-    networks_wb = system_scaffold.old_networks_wb
-    trainability = system_scaffold.old_layers_trainable
-    zeros = system_scaffold.old_zeros
-    #======================
+    io_parameters, parallelization_parameters, train_parameters,\
+        system_scaffold = parameters
 
     # aux computational variables
     global_step = tf.train.get_or_create_global_step()
 
     if io_parameters.input_format == "TFR":
-        _parse_fn = partial(
-            net.parse_fn_v1,
-            g_size=g_size,
-            zeros=zeros,
-            n_species=n_species,
-            forces=train_on_forces,
-            energy_rescale=en_rescale)
+        _parse_fn = system_scaffold.tfr_parse_function
     else:
         raise ValueError('input_format not avaiable')
 
     t_iterator = net.input_iterator(
         io_parameters.data_dir,
-        batch_size,
+        train_parameters.batch_size,
         _parse_fn,
         'train',
-        shuffle_buffer_size_multiplier,
-        prefetch_buffer_size_multiplier,
-        num_parallel_readers,
-        num_parallel_calls,
-        cache=dataset_cache)
+        parallelization_parameters.shuffle_buffer_size_multiplier,
+        parallelization_parameters.prefetch_buffer_size_multiplier,
+        parallelization_parameters.num_parallel_readers,
+        parallelization_parameters.num_parallel_calls,
+        cache=parallelization_parameters.dataset_cache)
 
-    if train_on_forces:
-        t_batch_s, t_batch_g, t_batch_e, t_batch_dg, t_batch_f =\
-            t_iterator.get_next()
-    else:
-        t_batch_s, t_batch_g, t_batch_e = t_iterator.get_next()
-
-    if io_parameters.input_format == "TFR":
-        if train_on_forces:
-            t_energies, t_batch_natoms, t_dEdG = \
-                net.network_A2A(t_batch_s, t_batch_g,
-                                layer_size=layers_sizes,
-                                trainability=layers_trainable,
-                                activations=layers_act,
-                                gvect_size = g_size,
-                                batch_size = batch_size,
-                                Nspecies=n_species,
-                                atomic_label=atomic_sequence,
-                                import_layer=networks_wb,
-                                compute_gradients=True)
-        else:
-            t_energies, t_batch_natoms = \
-                net.network_A2A(t_batch_s, t_batch_g,
-                                layer_size=layers_sizes,
-                                trainability=layers_trainable,
-                                activations=layers_act,
-                                gvect_size = g_size,
-                                batch_size = batch_size,
-                                Nspecies=n_species,
-                                atomic_label=atomic_sequence,
-                                import_layer=networks_wb)
+    # this call recover all the batches needed for a step
+    batches = t_iterator.get_next()
 
     # creation of the lr function
-    if learning_rate_constant:
-        lr = learning_rate
-    else:
-        lr = tf.train.exponential_decay(
-            learning_rate,
+    if not train_parameters.learning_rate_constant:
+        learning_rate = tf.train.exponential_decay(
+            train_parameters.learning_rate,
             global_step,
-            learning_rate_decay_step,
-            learning_rate_decay_factor,
+            train_parameters.learning_rate_decay_step,
+            train_parameters.learning_rate_decay_factor,
             staircase=False)
+    else:
+        learning_rate = train_parameters.learning_rate
 
-    tf.summary.scalar('learning_rate', lr)
+    loss, predictions = system_scaffold.tf_network(train_parameters.batch_size,
+                                                   batches)
+
+    tf.summary.scalar('learning_rate', learning_rate)
 
     # creation of the loss quantities
     w_l_norm_sum, b_l_norm_sum = net.l1l2_regularizations(
-        wscale_l1, wscale_l2, bscale_l1, bscale_l2)
-
-    logging.info('Loss func is {}'.format(loss_func))
-    loss, deltae = net.loss_NN(
-        t_energies, t_batch_e, t_batch_natoms, loss_func=loss_func)
-
-    # Loss from forces
-    if train_on_forces:
-        Floss = net.loss_F(
-            t_batch_s,
-            t_dEdG,
-            t_batch_dg,
-            t_energies,
-            t_batch_f,
-            t_batch_natoms,
-            batch_size=batch_size,
-            Nspecies=n_species,
-            gvect_size=g_size,
-            floss_func=floss_func)
+        train_parameters.wscale_l1, train_parameters.wscale_l2,
+        train_parameters.bscale_l1, train_parameters.bscale_l2)
 
     minimizable_quantity = tf.add_n([loss, w_l_norm_sum, b_l_norm_sum],
                                     name='minimize_me')
-    if train_on_forces:
-        minimizable_quantity = minimizable_quantity + forces_cost * Floss
-
-    train_op = net.train_NN(
-        minimizable_quantity,
-        global_step,
-        lr,
-        beta1,
-        beta2,
-        adam_eps,
-        atomic_sequence=atomic_sequence,
-        clip_value=clip_value)
+    train_op = net.train_neural_network(minimizable_quantity,
+                                        global_step,
+                                        learning_rate,
+                                        train_parameters.beta1,
+                                        train_parameters.beta2,
+                                        train_parameters.adam_eps,
+                                        clip_value=train_parameters.clip_value)
 
     # add all the loss quantities to the graph
     losses = tf.get_collection('losses')
-    for l in losses:
-        name = l.op.name.split("/")[-1]
-        tf.summary.scalar("1.Losses/" + name, l)
 
-    return train_op, t_iterator, deltae, t_batch_natoms, global_step, loss
+    for loss in losses:
+        name = loss.op.name.split("/")[-1]
+        tf.summary.scalar("1.Losses/" + name, loss)
+
+    return train_op, t_iterator, predictions, global_step, loss
 
 
 def train(flags, parameters, *var, **kvarg):
+    """Main train operation
+    """
 
     # extrapolate info for parallel running
     if flags.list_of_nodes != '':
@@ -326,11 +226,11 @@ def train(flags, parameters, *var, **kvarg):
         logging.info('running in serial environment')
 
     # split parameters in subinstance
-    (io_parameters, parallelization_parameters, train_parameters,
-     parameters_container, system_scaffold) = parameters
+    io_parameters, parallelization_parameters,\
+        train_parameters, system_scaffold = parameters
 
     # ===compatibility layer with old variable naming===
-    # TODO: remove this part
+    # FIXME: remove this part
     # train generic:
     batch_size = train_parameters.batch_size
     max_steps = train_parameters.max_steps
@@ -352,6 +252,12 @@ def train(flags, parameters, *var, **kvarg):
                 break
     else:
         tf.gfile.MakeDirs(io_parameters.train_dir)
+    if not tf.gfile.Exists(os.path.join(io_parameters.train_dir,
+                                        'networks_metadata.json')):
+        with open(
+                os.path.join(io_parameters.train_dir,
+                             'networks_metadata.json'), 'w') as file_stream:
+            json.dump(system_scaffold.metadata, file_stream)
 
     if task_index >= (len(list_of_nodes) - flags.parameter_servers):
         logging.info('Parameter server.')
@@ -365,8 +271,8 @@ def train(flags, parameters, *var, **kvarg):
             # this construction require a ps, fix later to support no ps
             with tf.device(tf.train.replica_device_setter(cluster=cluster)):
                 # build the graph
-                train_op, t_iterator, deltae, t_batch_natoms, \
-                    global_step, loss = _graph_builder(parameters)
+                train_op, t_iterator, predictions, global_step, loss =\
+                    _graph_builder(parameters)
 
                 # config the  Proto
                 config_proto = tf.ConfigProto(
@@ -392,10 +298,14 @@ def train(flags, parameters, *var, **kvarg):
 
                 # HOOKS
                 class _LoggerHook(tf.train.SessionRunHook):
-                    """Logs loss and runtime."""
-
-                    def __init__(self, starting_step=0, *args, **kwargs):
+                    """Logs loss and runtime.
+                    """
+                    def __init__(self, *args, starting_step=0, **kwargs):
                         self._starting_step = starting_step
+                        self._start_time = time.time()
+                        self._step = 0
+                        self._writer = None
+                        self._writer2 = None
 
                     def begin(self):
                         self._step = self._starting_step
@@ -406,7 +316,7 @@ def train(flags, parameters, *var, **kvarg):
                     def before_run(self, run_context):
                         self._step += 1
                         return tf.train.SessionRunArgs(
-                            [deltae, t_batch_natoms, global_step])
+                            [predictions, global_step])
 
                     def after_run(self, run_context, run_values):
                         if self._step <= 0:
@@ -427,7 +337,7 @@ def train(flags, parameters, *var, **kvarg):
                             time_str = time.strftime("%m-%d %H:%M:%S",
                                                      time.gmtime())
                             logging.info('{}, global step: {}'.format(
-                                time_str, run_values.results[2]))
+                                time_str, run_values.results[1]))
 
                         if self._step % io_parameters.avg_speed_steps == 0:
                             current_time = time.time()
@@ -448,8 +358,9 @@ def train(flags, parameters, *var, **kvarg):
                 chief_hooks = [tf.train.NanTensorHook(loss), _LoggerHook()]
                 # end of hooks
 
-                server = tf.train.Server(
-                    cluster, job_name="worker", task_index=task_index)
+                server = tf.train.Server(cluster,
+                                         job_name="worker",
+                                         task_index=task_index)
 
                 with tf.train.MonitoredTrainingSession(
                         master=server.target,
@@ -479,58 +390,58 @@ def train(flags, parameters, *var, **kvarg):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", type=str, default='', help="config file", required=True)
-    parser.add_argument(
-        '--list_of_nodes',
-        type=str,
-        default='',
-        help='comma-separated list of nodes')
-    parser.add_argument(
+    PARSER = argparse.ArgumentParser()
+    PARSER.add_argument("--config",
+                        type=str,
+                        default='',
+                        help="config file",
+                        required=True)
+    PARSER.add_argument('--list_of_nodes',
+                        type=str,
+                        default='',
+                        help='comma-separated list of nodes')
+    PARSER.add_argument(
         "--task_index_variable",
         type=str,
         default='',
         help="task index variable name, depends on workload manager")
-    parser.add_argument(
-        "--debug",
-        action='store_true',
-        help='enable debug mode, partial support only')
-    parser.add_argument(
+    PARSER.add_argument("--debug",
+                        action='store_true',
+                        help='enable debug mode, partial support only')
+    PARSER.add_argument(
         "--debug_parallel",
         action='store_true',
         help='debug parallel flag, use to have 2 server in local config')
-    parser.add_argument(
-        "--parameter_servers",
-        type=int,
-        default=0,
-        help='number of parameter server, default 0')
-    parser.add_argument(
-        "--debug_parallel_index", type=int, help='index 0 or 1')
-    parser.add_argument(
-        "--communication_port",
-        type=int,
-        default=22222,
-        help='communication port for parallel implementation')
-    flags, unparsed = parser.parse_known_args()
+    PARSER.add_argument("--parameter_servers",
+                        type=int,
+                        default=0,
+                        help='number of parameter server, default 0')
+    PARSER.add_argument("--debug_parallel_index",
+                        type=int,
+                        help='index 0 or 1')
+    PARSER.add_argument("--communication_port",
+                        type=int,
+                        default=22222,
+                        help='communication port for parallel implementation')
+    FLAGS, UNPARSED = PARSER.parse_known_args()
 
-    if flags.debug:
+    if FLAGS.debug:
         tf.logging.set_verbosity(1)
     else:
         tf.logging.set_verbosity(tf.logging.INFO)
 
     # set up console logger only for the chief
-    if flags.task_index_variable != '':
-        task_index = int(os.environ[flags.task_index_variable])
+    if FLAGS.task_index_variable != '':
+        TASK_INDEX = int(os.environ[FLAGS.task_index_variable])
     else:
-        task_index = 0
+        TASK_INDEX = 0
 
-    if task_index == 0:
+    if TASK_INDEX == 0:
         # add to master the console handler
         # and do the splash screen
-        lsh = or_logging.StreamHandler()
-        lsh.setFormatter(formatter)
-        tf_logger.addHandler(lsh)
-        _splash_screen(lsh.emit)
-    parameters = parameter_file_parser(flags.config)
-    train(flags, parameters)
+        LSH = or_logging.StreamHandler()
+        LSH.setFormatter(formatter)
+        tf_logger.addHandler(LSH)
+        _splash_screen(LSH.emit)
+    PARAMETERS = parameter_file_parser(FLAGS.config)
+    train(FLAGS, PARAMETERS)

@@ -5,16 +5,15 @@
 # The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
 # For further information on the license, see the LICENSE.txt file        #
 ###########################################################################
-import numpy as np
-
-if __name__ == 'a2affnetwork':
-    from layers import Layer
-    from layers import ShapeError
-else:
-    from .layers import Layer
-    from .layers import ShapeError
-
 from copy import deepcopy
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.python.platform import tf_logging as logger
+
+from lib.errors import ShapeError
+
+from .layers import Layer
 
 
 class A2affNetwork():
@@ -178,7 +177,7 @@ class A2affNetwork():
         return tuple(wb)
 
     @property
-    def network_kind(self):
+    def network_type(self):
         """ string
         kind of network
         """
@@ -224,8 +223,9 @@ class A2affNetwork():
             Derivatives, aka forces.
             this is returned ONLY if dfeatures_vectors.size > 0
         """
+        in_vectors = features_vector
+
         if dfeatures_vectors.size > 0:
-            in_vectors = features_vector
             din_vectors = np.transpose(dfeatures_vectors, (0, 2, 1))
             for layer in self._layers:
                 out_vectors, dout_vectors = layer.evaluate(
@@ -235,14 +235,28 @@ class A2affNetwork():
             if add_offset:
                 out_vectors += self.offset
             return out_vectors, dout_vectors
-        else:
-            in_vectors = features_vector
-            for layer in self._layers:
-                out_vectors = layer.evaluate(in_vectors)
+
+        for layer in self._layers:
+            out_vectors = layer.evaluate(in_vectors)
+            in_vectors = out_vectors
+        if add_offset:
+            out_vectors += self.offset
+        return out_vectors
+
+    def tf_evaluate(self, features_vector, compute_gradients=False):
+        in_vectors = features_vector
+
+        for l_idx, layer in enumerate(self._layers):
+            logger.debug('inserting layer - %d', l_idx)
+            with tf.variable_scope("species_{}_layer_{}".format(
+                    self.name, l_idx)):
+                out_vectors = layer.tf_evaluate(in_vectors)
                 in_vectors = out_vectors
-            if add_offset:
-                out_vectors += self.offset
-            return out_vectors
+
+        if compute_gradients:
+            return out_vectors, tf.gradients(out_vectors, features_vector)
+
+        return out_vectors
 
     def customize_network(self,
                           feature_size=None,
@@ -321,7 +335,7 @@ class A2affNetwork():
             self.offset = offset
 
         if new_structure:
-            # fucked up change is easier to recreate the network
+            # is easier to recreate the network
             # trainable and activation falgs are layer property
             # not network property, so overriding a layer means inherit
             # his trainability and activation
@@ -332,7 +346,9 @@ class A2affNetwork():
                 None, trainables, activations)
             old_layers = self._layers
             old_layers_size = self.layers_size
-            self.feature_size = feature_size if feature_size else self.feature_size
+
+            self.feature_size = feature_size if feature_size\
+                else self.feature_size
             self.layers_size = layers_size if layers_size else self.layers_size
             self._layers = new_net._layers
 
@@ -341,7 +357,7 @@ class A2affNetwork():
                     raise ValueError('{} layer_behavior != layer sizes'.format(
                         self.name))
                 for i, behavior in enumerate(behaviors):
-                    if behavior == 'keep_wb':
+                    if behavior == 'keep':
                         if i >= len(old_layers_size):
                             raise ValueError('requested to default a not '
                                              'available layer')
@@ -354,11 +370,6 @@ class A2affNetwork():
                     elif behavior == 'new':
                         # nothing to do, the layer is already the new version
                         pass
-                    elif behavior == 'keep':
-                        raise ValueError('if a new architecture is specified '
-                                         'then only keep_wb is available '
-                                         'to specify other parameters pass '
-                                         'proper keywords')
                     else:
                         raise ValueError('undefined behavior for layer')
         else:
@@ -377,10 +388,7 @@ class A2affNetwork():
                         tmp_layer = self._layers[i]
                         tmp_layer.w_value, tmp_layer.b_value = (np.empty(0),
                                                                 np.empty(0))
-                    elif behavior == 'keep_wb':
-                        raise ValueError('to achieve keep_wb behavior use keep'
-                                         'and specify other parameters with '
-                                         'proper keywords')
+
                     else:
                         raise ValueError('undefined behavior for layer')
 
@@ -389,116 +397,18 @@ class A2affNetwork():
             if activations:
                 self.layers_activation = activations
 
-    @classmethod
-    def regexps(cls):
+    @property
+    def tf_ckpt_elements(self):
         """ regexps for TF checkpoint
 
         Return
         ------
-        list of string with regexps to search for the layer inside
-        TF checkpoint
+        stirngs  + objects
         """
-        return [
-            '^' + '_'.join([cls._reg_exps['network'], x]) + '$'
-            for x in Layer.regexps()
-        ]
+        names = []
+        objects = []
 
-    @classmethod
-    def reconstruct_from_regexp(cls, matches, networks_metadata):
-        """
-        after matching all the parameters in the checkpoint this method
-        reconstruct all the founded networks
-
-        Args:
-           matches: all the result form match operation with regexp
-           networks_metadata:list of dict, one for each network, ordered
-
-        Attention:
-        keys needed in network metadata:
-            - none: everything has a default
-        optional:
-            - activations: list of activations for the given network.
-                           defaulted to the network default if not avaiable.
-            - offset: offset of the species, 0 if not passed
-            - trainables: if a layer is  trainable.
-                          defaulted to network default if not available.
-            - offset: offset of the species, 0 if not passed
-                      defaulted to network default if not available.
-        """
-        networks_weights = []
-        networks_weights_coord = []
-        networks_weights_tensors = []
-
-        networks_biases = []
-        networks_biases_coord = []
-        networks_biases_tensors = []
-
-        for match, shape, tensor in matches:
-            if len(shape) == 2:
-                networks_weights.append(shape)
-                networks_weights_coord.append(match[0])
-                networks_weights_tensors.append(tensor)
-            elif len(shape) == 1:
-                networks_biases.append(shape)
-                networks_biases_coord.append(match[0])
-                networks_biases_tensors.append(tensor)
-            else:
-                raise ValueError('wrong match size')
-
-        # transform to array
-        networks_weights_shape = np.asarray(networks_weights, dtype=np.int)
-        networks_weights_coord = np.asarray(
-            networks_weights_coord, dtype=np.int)
-        networks_weights_tensors = np.asarray(networks_weights_tensors)
-
-        networks_biases_shape = np.asarray(networks_biases, dtype=np.int)
-        networks_biases_coord = np.asarray(networks_biases_coord, dtype=np.int)
-        networks_biases_tensors = np.asarray(networks_biases_tensors)
-
-        # create networks
-        networks = []
-        for species_idx in set(networks_weights_coord[:, 0]):
-            species_name = networks_metadata[species_idx].get(
-                'species', str(species_idx))
-            activations = networks_metadata[species_idx].get(
-                'activations', None)
-            offset = networks_metadata[species_idx].get('offset', None)
-            trainables = networks_metadata[species_idx].get('trainables', None)
-            layers_idxs_w = np.where(
-                networks_weights_coord[:, 0] == species_idx)
-            network_weights_coord = networks_weights_coord[layers_idxs_w]
-            network_weights_shape = networks_weights_shape[layers_idxs_w]
-            network_weights_tensors = networks_weights_tensors[layers_idxs_w]
-            weights_permutation = np.argsort(network_weights_coord[:, 1])
-
-            layers_idxs_b = np.where(
-                networks_biases_coord[:, 0] == species_idx)
-            network_biases_coord = networks_biases_coord[layers_idxs_b]
-            network_biases_shape = networks_biases_shape[layers_idxs_b]
-            network_biases_tensors = networks_biases_tensors[layers_idxs_b]
-            biases_permutation = np.argsort(network_biases_coord[:, 1])
-
-            feature_size = network_weights_shape[weights_permutation[0], 0]
-            layers_size = []
-            network_wb = []
-            for layer, (w_idx, b_idx) in enumerate(
-                    zip(weights_permutation, biases_permutation)):
-                if network_weights_shape[w_idx,
-                                         1] == network_biases_shape[b_idx, 0]:
-                    layers_size.append(network_weights_shape[w_idx, 1])
-
-                    network_wb.append((network_weights_tensors[w_idx],
-                                       network_biases_tensors[b_idx]))
-
-                else:
-                    raise ValueError('inconsistency between w and b shapes')
-            network = cls(
-                feature_size,
-                layers_size,
-                species_name,
-                network_wb,
-                trainables=trainables,
-                activations=activations,
-                offset=offset)
-            networks.append((species_idx, network))
-        return networks
+        for l_idx, layer in enumerate(self._layers):
+            names.append("species_{}_layer_{}".format(self.name, l_idx))
+            objects.append(layer)
+        return names, objects

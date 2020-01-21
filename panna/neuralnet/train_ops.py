@@ -8,25 +8,26 @@
 import tensorflow as tf
 
 
-def train_NN(loss, global_step, lr, beta1, beta2, adam_eps, atomic_sequence, clip_value):
+def train_neural_network(loss, global_step, lr, beta1, beta2, adam_eps, clip_value):
     """Train NN model, optimization step.
 
     Create an optimizer and apply to all trainable variables. Add moving
     average for all trainable variables.
 
-    Args:
+    Parameters
+    ----------
       loss: quantity to minimize
       global_step: Integer Variable counting the number of training steps
                    processed.
       lr : learning rate
-      atomic_sequence: just for now here to simplify creation of histogram...
 
-    Returns:
+    Returns
+    -------
       train_op: op for training.
-
     """
 
-    opt = tf.train.AdamOptimizer(learning_rate=lr, beta1=beta1, beta2=beta2, epsilon=adam_eps)
+    opt = tf.train.AdamOptimizer(
+        learning_rate=lr, beta1=beta1, beta2=beta2, epsilon=adam_eps)
     # emine: hardcoded the gradient clipping for now.
     grad_vars = opt.compute_gradients(loss)
     if clip_value != 0.0:

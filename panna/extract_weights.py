@@ -16,17 +16,11 @@ import configparser
 from tensorflow.errors import NotFoundError
 
 import neuralnet as net
+from lib import init_logging
 from gvect_calculator import parse_file as parse_gvect_input
 
 # logger
-logger = logging.getLogger(__name__)
-formatter = logging.Formatter('%(asctime)s - %(name)s - \
-    %(levelname)s - %(message)s')
-
-# console handler
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+logger = logging.getLogger('panna')  # pylint: disable=invalid-name
 
 
 def main(conf_file):
@@ -36,69 +30,60 @@ def main(conf_file):
     in_dir = folder_info.get('train_dir', None)
     step_number = folder_info.getint('step_number', 0)
     out_dir = folder_info.get('output_dir', './saved_network')
-    species_list_string = folder_info.get('species_list', None)
-    if species_list_string:
-        species_list = species_list_string.split(',')
-    species_offsets_string = folder_info.get('species_offsets', None)
-    if species_offsets_string:
-        species_offsets = species_offsets_string.split(',')
-    train_input = folder_info.get('train_input', None)
+
     gvector_input = folder_info.get('gvector_input', None)
+
     output_type = folder_info.get('output_type', 'PANNA')
     output_file = folder_info.get('output_file', 'panna.in')
 
     extra_data = {}
 
-    if train_input:
-        io_parameters, parallelization_parameters, train_parameters, \
-            parameters_container, system_scaffold = net.parameter_file_parser(train_input)
-        if species_list_string == None:
-            species_list = system_scaffold.atomic_sequence
-        if species_offsets_string == None:
-            species_offsets = system_scaffold.old_zeros
+    json_file = os.path.join(in_dir, 'networks_metadata.json')
 
     if gvector_input:
-        gvect_func, folder_parameters, number_of_process = parse_gvect_input(
-            gvector_input)
+        gvect_func, *_dummy = parse_gvect_input(gvector_input)
         extra_data['gvect_params'] = gvect_func.gvect
+    else:
+        logger.info('missing gvect_params input file')
+        exit(1)
 
-    ck_files = net.Checkpoint.checkpoint_file_list(in_dir)
     ck_steps = net.Checkpoint.checkpoint_step_list(in_dir)
 
     if step_number in ck_steps:
         if not os.path.isdir(out_dir):
             os.mkdir(out_dir)
-        ck = net.Checkpoint(
+        ckpt = net.Checkpoint(
             os.path.join(in_dir, 'model.ckpt-{}'.format(step_number)),
-            species_list=species_list, species_offsets=species_offsets)
+            json_file)
         try:
             if output_type == 'PANNA':
-                ck.dump_PANNA_checkpoint_folder(
-                    folder=out_dir, extra_data=extra_data)
+                ckpt.dump_PANNA_checkpoint_folder(folder=out_dir,
+                                                  extra_data=extra_data)
             elif output_type == 'LAMMPS':
-                ck.dump_LAMMPS_checkpoint_folder(
-                    folder=out_dir,
-                    filename=output_file,
-                    extra_data=extra_data)
+                ckpt.dump_LAMMPS_checkpoint_folder(folder=out_dir,
+                                                   filename=output_file,
+                                                   extra_data=extra_data)
             else:
-                logger.info('Unknown output type {}'.format(output_type))
+                logger.info('Unknown output type %s', output_type)
         except NotFoundError:
-            logger.warning('{} not found because of TF bug'.format(x.filename))
-        logger.info('Weights saved in {}'.format(out_dir))
+            logger.warning('%s not found because of TF bug', ckpt.filename)
+        logger.info('Weights saved in %s', out_dir)
     else:
-        logger.info('step number {} not found'.format(step_number))
+        logger.info('step number %d not found', step_number)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-c', '--config', type=str, help='config file', required=True)
-    parser.add_argument(
-        '--debug', action='store_true', help='debug flag', required=False)
-    args = parser.parse_args()
+    init_logging()
+    PARSER = argparse.ArgumentParser()
+    PARSER.add_argument('-c',
+                        '--config',
+                        type=str,
+                        help='config file',
+                        required=True)
+    PARSER.add_argument('--debug',
+                        action='store_true',
+                        help='debug flag',
+                        required=False)
+    ARGS = PARSER.parse_args()
 
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-    main(args.config)
+    main(ARGS.config)

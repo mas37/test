@@ -6,34 +6,25 @@
 # For further information on the license, see the LICENSE.txt file        #
 ###########################################################################
 import os
-import json
 import argparse
-import matplotlib
 import itertools
 import logging
 import numpy as np
-import pandas as pd
 
-import matplotlib
 import matplotlib.pyplot as plt
 
 from matplotlib import cm
-from matplotlib import mlab as ml
 
 # PANNA interfaces
 # add PANNA folder to PYTHONPATH variable to enable these
 from gvector.pbc import replicas_max_idx
-from gvector.examplejsonwrapper import ExampleJsonWrapper
+
+from lib import ExampleJsonWrapper
+from lib import init_logging
 
 # logger
-logger = logging.getLogger(__name__)
-formatter = logging.Formatter('%(levelname)s - %(message)s')
+logger = logging.getLogger('panna.tools')
 
-# console handler
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
-logger.setLevel(logging.INFO)
 
 
 def main(args):
@@ -54,9 +45,9 @@ def main(args):
         example = ExampleJsonWrapper(
             os.path.join(args.source, eg), species_str_2_idx)
         positions = example.positions
-        n_atoms = example.n_atoms
+        n_atoms = example.number_of_atoms
         box = example.lattice_vectors
-        species = example.species
+        species = example.species_indexes
         max_indices = replicas_max_idx(box, args.r_cut)
         l_max, m_max, n_max = max_indices
         l_list = range(-l_max, l_max + 1)
@@ -192,6 +183,7 @@ def main(args):
 
 
 if __name__ == '__main__':
+    init_logging()
     parser = argparse.ArgumentParser(description='ijk distribution plotter')
     parser.add_argument(
         '-s',

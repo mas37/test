@@ -27,7 +27,8 @@ def main(source, navg, **kvargs):
     if os.path.isdir(source):
         files = [
             os.path.join(source, f) for f in os.listdir(source)
-            if os.path.isfile(os.path.join(source, f))
+            if (os.path.isfile(os.path.join(source, f)) and 
+                os.path.splitext(f)[-1] == '.bin')
         ]
         nfiles = len(files)
     else:
@@ -36,20 +37,30 @@ def main(source, navg, **kvargs):
         nfiles = 1
 
     for nsf, single_file in enumerate(files):
-        f = np.fromfile(single_file, dtype=np.float32)
-        n_atoms = int(f[0])
-        g_size = int(f[1])
-        en = float(f[2])
-        spec_size = n_atoms
-        gvect_size = n_atoms * g_size
-
-        if len(f) != (3 + spec_size + gvect_size):
-            print("file {} size inconsistent".format(single_file))
-            exit(1)
-
-        spec_tensor = np.reshape((f[3:spec_size + 3]).astype(np.int32),
+        with open(single_file, "rb") as binary_file:
+            bin_version = int.from_bytes(binary_file.read(4),
+                                         byteorder='little',
+                                         signed=False)
+            if bin_version != 0:
+                print("Version not supported!")
+                exit(1)
+            # converting to int to avoid handling little/big endian
+            flags = int.from_bytes(binary_file.read(2),
+                                   byteorder='little',
+                                   signed=False)
+            n_atoms = int.from_bytes(binary_file.read(4),
+                                     byteorder='little',
+                                     signed=False)
+            g_size = int.from_bytes(binary_file.read(4),
+                                    byteorder='little',
+                                    signed=False)
+            payload = binary_file.read()
+            data = np.frombuffer(payload, dtype='<f4')
+            en = data[0]
+            gvect_size = n_atoms * g_size
+            spec_tensor = np.reshape((data[1:1+n_atoms]).astype(np.int32),
                                  [1, n_atoms])
-        gvect_tensor = np.reshape(f[3 + spec_size:3 + gvect_size + spec_size],
+            gvect_tensor = np.reshape(data[1+n_atoms:1+n_atoms+gvect_size],
                                   [n_atoms, g_size])
 
         if navg == 0:

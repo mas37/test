@@ -12,9 +12,10 @@
 import argparse
 import itertools
 import json
-import math
 import multiprocessing as mp
 import os
+import logging
+from lib import ExampleJsonWrapper
 
 import random
 from functools import partial
@@ -26,6 +27,9 @@ from scipy.special import erf
 # add PANNA folder to PYTHONPATH variable to enable these
 # SEE README.md
 from gvector.pbc import replicas_max_idx
+from lib.log import init_logging
+
+logger = logging.getLogger('panna.tools')
 
 
 def fingprint(Rmax, delta, sigma, outdir, d, filename):
@@ -39,59 +43,27 @@ def fingprint(Rmax, delta, sigma, outdir, d, filename):
        d: dimensions (3, regular 2 surface material)
        filename is the input json (currectly in .example extension)
     '''
-    with open(filename) as file_stream:
-        example = json.load(file_stream)
 
-    unit_of_length = example.get('unit_of_length', '')
-    if unit_of_length in ['bohr', 'au', 'Bohr']:
-        A2unit = 1.0 / 0.529177
-    elif unit_of_length in ['A', 'Ang', 'ang', 'angstrom', 'Angstrom']:
-        A2unit = 1.0
-    else:
-        print('unit of length not recognized, assumed Angstrom', flush=True)
-        A2unit = 1.0
 
-    r_max = Rmax * A2unit
-    delta = delta * A2unit
-    sigma = sigma * A2unit
+    example = ExampleJsonWrapper(filename)
 
-    energy = float(example['energy'][0])
-    if example['energy'][1] in ['eV', 'ev', 'EV']:
-        unit2eV = 1.0
-    elif example['energy'][1] in ['Ry', 'rydberg', 'Rydberg', 'Ryd']:
-        unit2eV = 13.605698066
+    # extract information from wrapper in Angstrom and ev
+    #energy in ev
+    energy = example.ev_energy
+    #lattice vectors in angstrom
+    lattice_vectors = example.angstrom_lattice_vectors
+    #position in angstrom
+    pos_vector = example.angstrom_positions
+    #species string
+    type_vector = example.species_str
 
     outfile = filename.split('/')[-1].split('.example')[0] + ".fprint"
-
-    lattice_vectors = np.asarray(example['lattice_vectors']).astype(float)
     volume = np.abs(
         np.dot(lattice_vectors[0],
                np.cross(lattice_vectors[1], lattice_vectors[2])))
 
     if d == 2:
         volume = 1.0  # vol is not important for 2d structures, dont use it in the definition of FPs
-
-    atomic_position_unit = example['atomic_position_unit']
-
-    pos_vector = []
-    type_vector = []
-
-    # recover atomic info from file
-    for atom in example['atoms']:
-        try:
-            idx, symbol, position, *dummy = atom
-        except ValueError:
-            idx, symbol, position = atom
-
-        if atomic_position_unit == "crystal":
-            pos_vector.append(
-                np.dot(
-                    np.transpose(lattice_vectors),
-                    np.asarray(position).astype(float)))
-        else:
-            pos_vector.append(np.asarray(position).astype(float))
-
-        type_vector.append(symbol)
 
     pos_vector = np.asarray(pos_vector)
 
@@ -158,7 +130,7 @@ def fingprint(Rmax, delta, sigma, outdir, d, filename):
         for specie_b in range(specie_a, n_species):
             column_index = np.where(extended_type_vector == specie_b)[0]
             submatrix = extended_distances[row_index[:, None], column_index]
-            radius_mask = np.logical_and(submatrix < r_max, submatrix > 1e-5)
+            radius_mask = np.logical_and(submatrix < Rmax, submatrix > 1e-5)
             submatrix = submatrix[radius_mask]
 
             n_atoms_b = len(np.where(type_vector == specie_b)[0])
@@ -181,10 +153,9 @@ def fingprint(Rmax, delta, sigma, outdir, d, filename):
             fingerprints_dict[name_string] = fingerprint_ab.tolist()
             fingerprints_dict['w' +
                               name_string] = n_atoms_a * n_atoms_b / weight_ab
-    fingerprints_dict['energy'] = energy * unit2eV
-    fingerprints_dict['vol'] = volume * (1.0 / A2unit)**3
+    fingerprints_dict['energy'] = energy
+    fingerprints_dict['vol'] = volume
     fingerprints_dict['number_atoms'] = n_atoms
-
     with open(os.path.join(outdir, outfile), 'w') as fingerprint_outstream:
         json.dump(fingerprints_dict, fingerprint_outstream)
     return
@@ -192,18 +163,18 @@ def fingprint(Rmax, delta, sigma, outdir, d, filename):
 
 def main(indir, outdir, nproc, d):
     #compute many configuration at a time
-    print('Input dir {}'.format(indir), flush=True)
-    print('Output dir requested {}'.format(outdir), flush=True)
-    print('Number of parallel processes {}'.format(nproc), flush=True)
-    print('Structure is assumed {} dimensional'.format(d), flush=True)
+    logger.info('Input dir %s', indir)
+    logger.info('Output dir requested %s', outdir)
+    logger.info('Number of parallel processes %d', nproc)
+    logger.info('Structure is assumed %d dimensional', d)
     p = mp.Pool(nproc)
     if os.path.isdir(outdir):
         outdir = os.path.abspath(outdir)
-        print('Output dir exists: {}'.format(outdir), flush=True)
+        logger.info('Output dir exists: %s', outdir)
     else:
         os.makedirs(outdir)
         outdir = os.path.abspath(outdir)
-        print('Output dir created: {}'.format(outdir), flush=True)
+        logger.info('Output dir created: %s', outdir)
 
     fp_done_key = []
 
@@ -244,6 +215,7 @@ def main(indir, outdir, nproc, d):
     print(
         'Jsons to be done per proc = {}'.format(int(len(jsonfiles) / nproc)),
         flush=True)
+    
     while i <= int(len(jsonfiles) / nproc):
         ll = i * nproc
         lu = (i + 1) * nproc
@@ -257,25 +229,25 @@ def main(indir, outdir, nproc, d):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='makes FingerPrints')
-    parser.add_argument(
+    init_logging()
+    PARSER = argparse.ArgumentParser(description='makes FingerPrints')
+    PARSER.add_argument(
         '-i', '--indir', type=str, help='in path', required=True)
-    parser.add_argument(
+    PARSER.add_argument(
         '-o', '--outdir', type=str, help='out path', required=True)
-    parser.add_argument(
+    PARSER.add_argument(
         '--nproc', type=int, help='omp_num_threads', required=False, default=1)
-    parser.add_argument(
+    PARSER.add_argument(
         '--dimension',
         type=int,
         help='number of dimensions',
         required=False,
         default=3)
 
-    args = parser.parse_args()
-    print('BEGIN FP CALCULATION')
-    #print(args.nproc)
+    ARGS = PARSER.parse_args()
+    logger.info('BEGIN FP CALCULATION')
     main(
-        indir=args.indir,
-        outdir=args.outdir,
-        nproc=args.nproc,
-        d=args.dimension)
+        indir=ARGS.indir,
+        outdir=ARGS.outdir,
+        nproc=ARGS.nproc,
+        d=ARGS.dimension)

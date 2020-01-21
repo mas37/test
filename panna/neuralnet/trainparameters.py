@@ -5,27 +5,19 @@
 # The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
 # For further information on the license, see the LICENSE.txt file        #
 ###########################################################################
-import numpy as np
 import configparser
+
 from tensorflow.python.platform import tf_logging as logger
 
-if __name__ == 'trainparameters':
-    import parser_callable
-    from a2affnetwork import A2affNetwork
-    from systemscaffold import SystemScaffold
-    from systemscaffold import NetworkNotAvailableError
-else:
-    from . import parser_callable
-    from .a2affnetwork import A2affNetwork
-    from .systemscaffold import SystemScaffold
-    from .systemscaffold import NetworkNotAvailableError
+from lib.parser_callable import converters
+from .scaffold_selector import scaffold_selector
 
 
 class TrainParameters():
     def __init__(self, batch_size, learning_rate, learning_rate_constant,
                  learning_rate_decay_factor, learning_rate_decay_step, beta1,
                  beta2, adam_eps, max_steps, wscale_l1, wscale_l2, bscale_l1,
-                 bscale_l2, forces_cost, clip_value, loss_func, floss_func):
+                 bscale_l2, clip_value):
         super().__init__()
         self.batch_size = batch_size
         self.learning_rate = learning_rate
@@ -40,17 +32,7 @@ class TrainParameters():
         self.wscale_l2 = wscale_l2
         self.bscale_l1 = bscale_l1
         self.bscale_l2 = bscale_l2
-        self.forces_cost = forces_cost
         self.clip_value = clip_value
-        self.loss_func = loss_func
-        self.floss_func = floss_func
-
-    @property
-    def train_on_forces(self):
-        if self.forces_cost > 0.0:
-            return True
-        else:
-            return False
 
 
 class IOParameters():
@@ -89,23 +71,8 @@ class ParallelizationParameters():
         self.dataset_cache = dataset_cache
 
 
-class ParametersContainer1AM():
-    def __init__(self, en_rescale):
-        self.en_rescale = en_rescale
-
-
 def parameter_file_parser(filename):
-    config = configparser.ConfigParser(
-        converters={
-            '_comma_list': parser_callable.get_list_from_comma_sep_strings,
-            '_comma_list_floats': parser_callable.\
-                get_list_floats_from_comma_sep_strings,
-            '_network_architecture': parser_callable.get_network_architecture,
-            '_network_trainable': parser_callable.get_network_trainable,
-            '_network_act': parser_callable.get_network_act,
-            '_network_behavior': parser_callable.get_network_behavior
-        }
-    )
+    config = configparser.ConfigParser(converters=converters)
     logger.info('reading {}'.format(filename))
     config.read(filename)
 
@@ -202,204 +169,25 @@ def parameter_file_parser(filename):
     wscale_l2 = lr_parms.getfloat('wscale_l2', 0.0)
     bscale_l1 = lr_parms.getfloat('bscale_l1', 0.0)
     bscale_l2 = lr_parms.getfloat('bscale_l2', 0.0)
-    forces_cost = lr_parms.getfloat('forces_cost', 0.0)
     clip_value = lr_parms.getfloat('clip_value', 0.0)
-    loss_func = lr_parms.get('loss_function', 'quad')
-    floss_func = lr_parms.get('floss_function', 'quad')
     # possible options are quad, exp_quad, quad_atom, exp_quad_atom
 
     train_parameters = TrainParameters(
         batch_size, learning_rate, learning_rate_constant,
         learning_rate_decay_factor, learning_rate_decay_step, beta1, beta2,
         adam_eps, max_steps, wscale_l1, wscale_l2, bscale_l1, bscale_l2,
-        forces_cost, clip_value, loss_func, floss_func)
+        clip_value)
 
-    #=== Data option part ===
-    data_params = config['DATA_INFORMATION']
-    atomic_sequence = data_params.get_comma_list('atomic_sequence', [])
-    en_rescale = data_params.getfloat('energy_rescale', 1.0)
-    zeros = data_params.get_comma_list_floats('output_offset', [])
-
-    parameters_container = ParametersContainer1AM(en_rescale)
-    default_networks_metadata_folder = None
-    # === NETWORK option part ===
-    # default network to be loaded
-    if 'DEFAULT_NETWORK' in config:
-        default_net_params = config['DEFAULT_NETWORK']
-        # set network type
-        nn_type = default_net_params.get('nn_type', 'a2aff')
-        if nn_type in ['a2aff', 'A2AFF', 'ff', 'a2a', 'FF', 'A2A']:
-            nn_type = 'a2ff'
-        else:
-            raise ValueError(
-                '{} != a2aff : '
-                'Only all-to-all feed forward networks supported'.format(
-                    nn_type))
-
-        # set architecture
-        default_g_size = default_net_params.getint('g_size')
-        default_layer_sizes = default_net_params.get_network_architecture(
-            'architecture')
-        if default_layer_sizes:
-            logger.info(
-                'Found a default network: {}'.format([default_g_size] +
-                                                     default_layer_sizes))
-            logger.info('This network size will be used as '
-                        'default for all species unless specified otherwise')
-
-        # set trainability
-        default_layer_trainable = default_net_params.get_network_trainable(
-            'trainable', None)
-
-        if default_layer_trainable:
-            logger.info('Found a default trainability: {}'.format(
-                default_layer_trainable))
-        else:
-            logging.warning('Set to default trainability: all trainable')
-
-        # set activations
-        default_layer_act = default_net_params.get_network_act(
-            'activations', None)
-        if default_layer_act:
-            logger.warning('Found a default activation list: '
-                           '{}'.format(default_layer_act))
-        else:
-            # default is gaussian:gaussian: ... : linear
-            logger.info('Set to default activation: '
-                        'gaussians + last linear')
-
-        # search for a default network stored in file
-        default_networks_metadata_folder = default_net_params.get(
-            'networks_metadata', None)
-        if default_networks_metadata_folder:
-            logger.warning('Networks in {} will be loaded'.format(
-                default_networks_metadata_folder))
-
-        default_net = A2affNetwork(default_g_size, default_layer_sizes,
-                                   'default', None, default_layer_trainable,
-                                   default_layer_act)
-
+    # === scaffold part ===
+    if 'DATA_INFORMATION' in config:
+        scaffold_type = config['DATA_INFORMATION'].get(
+            'scaffold_type', 'PANNA')
     else:
-        default_net = None
-        logger.info('No default network is found, '
-                    'all species must be fully specified.')
+        scaffold_type = 'PANNA'
 
-    if default_networks_metadata_folder:
-        system_scaffold = SystemScaffold.load_PANNA_checkpoint_folder(
-            default_networks_metadata_folder,
-            default_net,
-            original_offsets=zeros)
-        # update atomic sequence
-        old_atomic_sequence = atomic_sequence
-        atomic_sequence = system_scaffold.atomic_sequence
-        for i, j in zip(atomic_sequence, old_atomic_sequence):
-            if i != j:
-                logger.info('new atomic sequence {}'.format(atomic_sequence))
-                break
-    else:
-        system_scaffold = SystemScaffold(default_net, atomic_sequence, zeros)
+    logger.info('scaffold type: %s', scaffold_type)
+    Scaffold = scaffold_selector(scaffold_type)  # pylint: disable=invalid-name
+    scaffold = Scaffold(config)
 
-    # parsing single atomic species
-    # if a default is specified every species behave as the default
-    # if no default is specified than every species must be fully described
-    for species in atomic_sequence:
-        if species in config:
-            logger.info('=={}== Found network specifications'.format(species))
-            species_config = config[species]
-
-            # architecture
-            g_size = species_config.getint('g_size')
-            layers_size = species_config.get_network_architecture(
-                'architecture', None)
-            # trainable flag
-            layers_trainable = species_config.get_network_trainable(
-                'trainable', None)
-            # layers behavior flag:
-            layers_behavior = species_config.get_network_behavior(
-                'behavior', None)
-            # activation
-            layers_act = species_config.get_network_act('activations', None)
-            # output_offset
-            output_offset = species_config.getfloat('output_offset', None)
-
-            # network_wb
-            override_wb = {}
-            if layers_behavior:
-                for layer_number, behavior in enumerate(layers_behavior):
-                    if behavior == 'load':
-                        w_file_name = species_config.get(
-                            'layer{}_w_file'.format(layer_number))
-                        b_file_name = species_config.get(
-                            'layer{}_b_file'.format(layer_number))
-                        if not (w_file_name and b_file_name):
-                            raise ValueError('not passed file names')
-                        w_values = np.load(w_file_name)
-                        b_values = np.load(b_file_name)
-                        override_wb[layer_number] = (w_values, b_values)
-
-            def _local_log_helper(network):
-                spe = '=={}== '.format(species)
-                if layers_size:
-                    logger.info(spe + 'New network architecture: {}'.format(
-                        network.layers_size))
-                else:
-                    logger.warning(spe + 'Architecture flag was not specified '
-                                   '- set to {}'.format([network.feature_size]
-                                                        + network.layers_size))
-
-                if layers_trainable:
-                    logger.info(spe + 'New trainable flags: {}'.format(
-                        network.layers_trainable))
-                else:
-                    logger.warning(
-                        spe + 'Trainable flag was not specified '
-                        '- set to {}'.format(network.layers_trainable))
-
-                if layers_behavior:
-                    logger.info(spe + 'New layer behavior flags: {}'.format(
-                        layers_behavior))
-
-                if layers_act:
-                    logger.info(spe + 'New activations : {}'.format(
-                        network.layers_activation))
-                else:
-                    logger.warning(
-                        spe + 'Activations flag is not specified '
-                        '- set to {}'.format(network.layers_activation))
-                if override_wb:
-                    for k in override_wb:
-                        logger.warning(spe + 'override layer {}'.format(k))
-                else:
-                    logger.info(spe + 'No override asked')
-
-                if output_offset:
-                    logger.info(spe +
-                                'New output offset: {}'.format(network.offset))
-                else:
-                    logger.warning(spe +
-                                   'Output offset flag was not specified '
-                                   '- set to {}'.format(network.offset))
-
-            # real setting up:
-            try:
-                species_network = system_scaffold[species]
-                species_network.customize_network(
-                    g_size, layers_size, layers_trainable, layers_behavior,
-                    layers_act, output_offset, override_wb)
-                _local_log_helper(species_network)
-            except NetworkNotAvailableError:
-                if not layers_size:
-                    raise ValueError('not available network structure')
-                # triggered only if a default fall back is not present
-                network_wb = [(np.empty(0), np.empty(0))
-                              for i in range(len(layers_size))]
-                for k, v in override_wb.items():
-                    network_wb[k] = v
-                species_network = A2affNetwork(g_size, layers_size, species,
-                                               network_wb, layers_trainable,
-                                               layers_act, output_offset)
-
-                system_scaffold[species] = species_network
-                _local_log_helper(species_network)
-    return io_parameters, parallelization_parameters, train_parameters, \
-            parameters_container, system_scaffold
+    return io_parameters, parallelization_parameters,\
+        train_parameters, scaffold

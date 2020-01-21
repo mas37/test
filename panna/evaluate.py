@@ -9,29 +9,26 @@
 note:
     if batchsize == -1 then use the whole dataset
 """
-import os
-import logging
 import argparse
 import configparser
-import random as rnd
-import numpy as np
+import logging
 import multiprocessing as mp
+import os
+import random as rnd
 
 from tensorflow.errors import NotFoundError
 
 import neuralnet as net
-from neuralnet.systemscaffold import SystemScaffold
-import neuralnet.parser_callable as parser_callable
+from neuralnet.scaffold_selector import scaffold_selector
+from lib import init_logging
+from lib.parser_callable import converters
 
 # logger
-logger = logging.getLogger('logfile')
-formatter = logging.Formatter('%(asctime)s - %(name)s - \
-    %(levelname)s - %(message)s')
+logger = logging.getLogger('panna')
 
-# console handler
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+
+class DataContainer():
+    pass
 
 
 def _eval_function(example, scaffold, add_offset):
@@ -87,85 +84,70 @@ def _eval_function_forces(example, scaffold, add_offset):
     forces_ref = forces_ref.reshape(n_atoms, 3)
     forces_prediction = forces_prediction.reshape(n_atoms, 3)
     string2_list = [
-        example.name + ' {} '.format(idx) + ' '.join([
-            str(f) for f in forces_prediction[idx]
-        ]) + ' ' + ' '.join([str(f) for f in forces_ref[idx]])
-        for idx in range(n_atoms)
+        example.name + ' {} '.format(idx) +
+        ' '.join([str(f) for f in forces_prediction[idx]]) + ' ' +
+        ' '.join([str(f) for f in forces_ref[idx]]) for idx in range(n_atoms)
     ]
     string2 = '\n'.join(string2_list) + '\n'
     return string, string2
 
 
-def parse_file(conf_file):
-    """ Parse validation config file
-    """
-    config = configparser.ConfigParser(
-        converters={
-            '_comma_list': parser_callable.get_list_from_comma_sep_strings,
-            '_comma_list_floats': parser_callable.\
-                get_list_floats_from_comma_sep_strings,
-            '_network_architecture': parser_callable.get_network_architecture,
-            '_network_trainable': parser_callable.get_network_trainable
-        }
-    )
-    config.read(conf_file)
+def _ckpts_selector(train_dir, validation_parameters):
+    ck_files = net.Checkpoint.checkpoint_file_list(train_dir)
+    ck_steps = net.Checkpoint.checkpoint_step_list(train_dir)
 
-    class IOParameters():
-        pass
+    if (validation_parameters.single_step
+            and not validation_parameters.step_number):
+        logger.info('evaluating last checkpoint')
+        ck_files = [ck_files[-1]]
+        ck_steps = [ck_steps[-1]]
+    elif (validation_parameters.single_step
+          and validation_parameters.step_number):
+        logger.info('evaluating step number %d',
+                    validation_parameters.step_number)
+        logger.info('not implemented, '
+                    'but one has just to look in steps finder')
+        raise NotImplementedError()
+    elif (not validation_parameters.single_step
+          and validation_parameters.subsampling):
+        logger.info('evaluation of all the checkpoints at steps of %d ',
+                    validation_parameters.subsampling)
+        ck_files = ck_files[::validation_parameters.subsampling]
+        ck_steps = ck_steps[::validation_parameters.subsampling]
+    else:
+        logger.info('evaluation of all the checkpoints')
+    return ck_files, ck_steps
 
-    io_parameters = IOParameters()
+
+def _parse_io(io_info):
+    io_parameters = DataContainer()
     # recover parameters
-    io_info = config['IO_INFORMATION']
     io_parameters.train_dir = io_info.get('train_dir')
     io_parameters.eval_dir = io_info.get('eval_dir')
     io_parameters.data_dir = io_info.get('data_dir')
 
     # if network is PANNA there are no problem,
     io_parameters.networks_format = io_info.get('networks_format',
-                                                'checkpoint')
+                                                'tf_checkpoint')
     if io_parameters.networks_format == 'PANNA':
         io_parameters.networks_folder = io_info.get('networks_folder',
                                                     './saved_networks')
+    elif io_parameters.networks_format == 'tf_checkpoint':
+        io_parameters.networks_folder = None
+    else:
+        raise ValueError('this input format is no more supported')
 
     io_parameters.example_format = io_info.get('example_format', 'TFR')
+    return io_parameters
 
-    io_parameters.number_of_process = 4
-    if config.has_section('PARALLELIZATION'):
-        parallelization = config['PARALLELIZATION']
-        io_parameters.number_of_process = parallelization.getint(
-            'number_of_process', io_parameters.number_of_process)
 
-    class DataParameters():
-        pass
-
-    data_parameters = DataParameters()
-
-    data_information = config['DATA_INFORMATION']
-    data_parameters.atomic_sequence = data_information.get_comma_list(
-        'atomic_sequence')
-
-    data_parameters.n_species = len(data_parameters.atomic_sequence)
-
-    data_parameters.g_size = data_information.getint('g_size')
-    zeros = data_information.get_comma_list_floats(
-        'output_offset', [0.0 for x in data_parameters.atomic_sequence])
-    zeros = np.asarray(zeros)
-
-    class ValidationParameters():
-        pass
-
-    validation_parameters = ValidationParameters()
-    validation_options = config['VALIDATION_OPTIONS']
+def _parse_validation(validation_options):
+    validation_parameters = DataContainer()
 
     validation_parameters.compute_forces = validation_options.getboolean(
         'compute_forces', False)
-
     validation_parameters.batch_size = validation_options.getint(
         'batch_size', -1)
-    if io_parameters.example_format == 'TFR':
-        logger.info('batch_size set to -1,'
-                    ' TFR does not support this option')
-        validation_parameters.batch_size = -1
     validation_parameters.single_step = validation_options.getboolean(
         'single_step', False)
     validation_parameters.step_number = validation_options.getint(
@@ -174,81 +156,52 @@ def parse_file(conf_file):
         'subsampling', None)
     validation_parameters.add_offset = validation_options.getboolean(
         'add_offset', True)
+    return validation_parameters
 
-    networks_kind = []
-    networks_metadata = []
 
-    if io_parameters.networks_format == 'checkpoint':
-        if 'DEFAULT_NETWORK' in config:
-            default_net_params = config['DEFAULT_NETWORK']
-            # set network type
-            default_nn_type = default_net_params.get('nn_type', 'a2aff')
-            if default_nn_type in ['a2aff', 'A2AFF', 'ff', 'a2a', 'FF', 'A2A']:
-                default_nn_type = 'a2ff'
-            else:
-                raise ValueError(
-                    '{} != a2aff : '
-                    'Only all-to-all feed forward networks supported'.format(
-                        nn_type))
+def _parse_tfr_structure(tfr_options):
+    tfr_parameters = DataContainer()
 
-            # set activations
-            default_layer_act = default_net_params.get_network_act(
-                'activations', None)
-            if default_layer_act:
-                logger.waring('Found a default activation list: '
-                              '{}'.format(default_layer_act))
-            else:
-                # default is gaussian:gaussian: ... : linear
-                logger.info('Set to default activation: '
-                            'gaussians + last linear')
-        else:
-            default_nn_type = 'a2ff'
-            default_layer_act = None
+    tfr_parameters.sparse_derivatives = tfr_options.getboolean(
+        'sparse_derivatives', False)
+    tfr_parameters.g_size = tfr_options.getint('g_size')
+    return tfr_parameters
 
-        for species, zero in zip(data_parameters.atomic_sequence, zeros):
-            if species in config:
-                logger.info(
-                    '=={}== Found network specifications'.format(species))
-                species_config = config[species]
 
-                spe = '=={}== '.format(species)
-                nn_type = default_net_params.get('nn_type', 'a2aff')
-                if nn_type in ['a2aff', 'A2AFF', 'ff', 'a2a', 'FF', 'A2A']:
-                    nn_type = 'a2ff'
-                else:
-                    raise ValueError(
-                        '{} != a2aff : '
-                        'Only all-to-all feed forward networks supported'.
-                        format(nn_type))
-                # activation
-                layers_act = species_config.get_network_act(
-                    'activations', None)
-                if layers_act:
-                    logger.info(spe +
-                                'New activations : {}'.format(layers_act))
+def parse_file(conf_file):
+    """ Parse validation config file
+    """
+    config = configparser.ConfigParser(converters=converters)
+    config.read(conf_file)
 
-                networks_kind.append(nn_type)
-                networks_metadata.append({
-                    'species': species,
-                    'activations': layer_act,
-                    'offset': zero
-                })
+    io_info = config['IO_INFORMATION']
+    io_parameters = _parse_io(io_info)
 
-            else:
-                networks_kind.append(default_nn_type)
+    parallel_param = DataContainer()
+    parallel_param.number_of_process = 4
+    if config.has_section('PARALLELIZATION'):
+        parallelization = config['PARALLELIZATION']
+        parallel_param.number_of_process = parallelization.getint(
+            'number_of_process', parallel_param.number_of_process)
 
-                networks_metadata.append({
-                    'species': species,
-                    'activations': default_layer_act,
-                    'offset': zero
-                })
-    return (io_parameters, data_parameters, validation_parameters,
-            networks_kind, networks_metadata)
+    validation_options = config['VALIDATION_OPTIONS']
+    validation_parameters = _parse_validation(validation_options)
+
+    # small hack for not supported op
+    if io_parameters.example_format == 'TFR':
+        logger.info('batch_size set to -1,'
+                    ' TFR does not support this option')
+        validation_parameters.batch_size = -1
+        tfr_parameters = _parse_tfr_structure(config['TFR_STRUCTURE'])
+    else:
+        tfr_parameters = None
+
+    return io_parameters, parallel_param, validation_parameters, tfr_parameters
 
 
 def main(parameters):
-    (io_parameters, data_parameters, validation_parameters, networks_kind,
-     networks_metadata) = parameters
+    io_parameters, parallel_param, validation_parameters,\
+        tfr_parameters = parameters
 
     if not os.path.isdir(io_parameters.eval_dir):
         os.mkdir(io_parameters.eval_dir)
@@ -258,93 +211,72 @@ def main(parameters):
         for x in os.listdir(io_parameters.data_dir)
     ]
 
-    logger.info('files in the dataset: {}'.format(len(dataset_files)))
+    logger.info('files in the dataset: %d ', len(dataset_files))
 
-    if io_parameters.networks_format == 'checkpoint':
-        ck_files = net.Checkpoint.checkpoint_file_list(io_parameters.train_dir)
-        ck_steps = net.Checkpoint.checkpoint_step_list(io_parameters.train_dir)
+    if io_parameters.networks_format == 'tf_checkpoint':
 
-        if (validation_parameters.single_step
-                and not validation_parameters.step_number):
-            logger.info('evaluating last checkpoint')
-            ck_files = [ck_files[-1]]
-            ck_steps = [ck_steps[-1]]
-        elif (validation_parameters.single_step
-              and validation_parameters.step_number):
-            logger.info('evaluating step number {}'.format(
-                parameters.step_number))
-            logger.info(
-                'not implemented, but one has just to look in steps finder')
-        elif (not validation_parameters.single_step
-              and validation_parameters.subsampling):
-            logger.info(
-                'evaluation of all the checkpoints at steps of {}'.format(
-                    validation_parameters.subsampling))
-            ck_files = ck_files[::validation_parameters.subsampling]
-            ck_steps = ck_steps[::validation_parameters.subsampling]
-        else:
-            logger.info('evaluation of all the checkpoints')
+        ck_files, ck_steps = _ckpts_selector(io_parameters.train_dir,
+                                             validation_parameters)
 
-        cks = [
+        # load ckpts
+        ckpts = [
             net.Checkpoint(
-                path_file=os.path.join(io_parameters.train_dir, x),
-                species_list=data_parameters.atomic_sequence,
-                networks_kind=networks_kind,
-                networks_metadata=networks_metadata) for x in ck_files
+                ckpt_file=os.path.join(io_parameters.train_dir, x),
+                json_file=os.path.join(io_parameters.train_dir,
+                                       'networks_metadata.json'),
+            ) for x in ck_files
         ]
 
-        nns_tmp = []
-        for x in cks:
+        # extract scaffols
+        scaffolds = []
+        for ckpt in ckpts:
             try:
-                scaf = x.get_scaffold
-                nns_tmp.append(scaf)
+                scaf = ckpt.get_scaffold
+                scaffolds.append(scaf)
             except NotFoundError:
-                logger.warning('%s not found because of TF bug', x.filename)
+                logger.warning('%s not found because of TF bug', ckpt.filename)
 
-        nns = []
-        writers = []
+        scaffolds_non_computed = []
+        energy_writers = []
+
         if validation_parameters.compute_forces:
-            f_writers = []
+            force_writers = []
 
-        for x, nn in zip(ck_steps, nns_tmp):
+        # filter already computed scaffolds
+        for ck_step, scaffold in zip(ck_steps, scaffolds):
             file_name = os.path.join(io_parameters.eval_dir,
-                                     '{}.dat'.format(x))
+                                     '{}.dat'.format(ck_step))
+
             if os.path.isfile(file_name) and os.path.getsize(file_name) > 100:
                 logger.info('%s already computed', file_name)
                 continue
 
-            writers.append(
-                open(
-                    os.path.join(io_parameters.eval_dir, '{}.dat'.format(x)),
-                    'w'))
-            nns.append(nn)
+            scaffolds_non_computed.append(scaffold)
 
+            energy_writers.append(
+                open(
+                    os.path.join(io_parameters.eval_dir,
+                                 '{}.dat'.format(ck_step)), 'w'))
             if validation_parameters.compute_forces:
-                f_writers.append(
+                force_writers.append(
                     open(
                         os.path.join(io_parameters.eval_dir,
-                                     '{}_forces.dat'.format(x)), 'w'))
+                                     '{}_forces.dat'.format(ck_step)), 'w'))
 
     elif io_parameters.networks_format == 'PANNA':
-        arch_file = os.path.join(io_parameters.networks_folder,
-                                 'networks_metadata.json')
-        if os.path.isfile(arch_file):
-            system_scaffold = SystemScaffold.load_PANNA_checkpoint_folder(
-                './saved_networks')
-            nns = [system_scaffold]
-            writers = [
-                open(
-                    os.path.join(io_parameters.eval_dir, 'energies.dat'), 'w')
+
+        scaffold = scaffold_selector('PANNA')()
+
+        scaffold.load_panna_checkpoint_folder('./saved_networks')
+
+        scaffolds_non_computed = [scaffold]
+        energy_writers = [
+            open(os.path.join(io_parameters.eval_dir, 'energies.dat'), 'w')
+        ]
+        if validation_parameters.compute_forces:
+            force_writers = [
+                open(os.path.join(io_parameters.eval_dir, 'forces.dat'), 'w')
             ]
-            if validation_parameters.compute_forces:
-                f_writers = [
-                    open(
-                        os.path.join(io_parameters.eval_dir, 'forces.dat'),
-                        'w')
-                ]
-        else:
-            logger.info('Please specify a valid json file and path.')
-            exit()
 
     else:
         logger.info('Unknown network format.')
@@ -352,21 +284,23 @@ def main(parameters):
 
     logger.info('----start----')
 
-    [x.write('#filename n_atoms e_ref e_nn\n') for x in writers]
+    [x.write('#filename n_atoms e_ref e_nn\n') for x in energy_writers]
 
     if validation_parameters.compute_forces:
         [
             x.write(
                 '#filename atom_id fx_nn fy_nn fz_nn fx_ref fy_ref fz_ref\n')
-            for x in f_writers
+            for x in force_writers
         ]
 
     examples = []
-    pool = mp.Pool(processes=io_parameters.number_of_process)
+    pool = mp.Pool(processes=parallel_param.number_of_process)
 
-    for scaffold, wi in zip(nns, range(len(writers))):
-        logger.info('validating network: {}/{}'.format(scaffold.name,
-                                                       nns[-1].name))
+    for scaffold, writer_idx in zip(scaffolds_non_computed,
+                                    range(len(energy_writers))):
+
+        logger.info('validating network: %s/%s', scaffold.name,
+                    scaffolds_non_computed[-1].name)
 
         if io_parameters.example_format == 'single_files':
             # when the examples are all separated in different files
@@ -376,29 +310,28 @@ def main(parameters):
                 example_files = dataset_files
                 logger.info('loading all the example in the folder,'
                             'this operation may take a while')
-                examples_parameters = [(x, data_parameters.n_species,
-                                        validation_parameters.compute_forces)
-                                       for x in example_files]
+                examples_parameters = [(x, ) for x in example_files]
                 examples = pool.starmap(net.load_example, examples_parameters)
 
             elif validation_parameters.batch_size > 0:
                 # if the validation dataset is too big can be useful
                 # to only randomly sample it
                 rnd.shuffle(dataset_files)
-                example_files = dataset_files[:validation_parameters.batch_size]
+                example_files = dataset_files[:validation_parameters.
+                                              batch_size]
                 logger.info('loading a subset of all the available '
                             'examples in the folder')
-                examples_parameters = [(x, data_parameters.n_species,
-                                        validation_parameters.compute_forces)
-                                       for x in example_files]
+                examples_parameters = [(x, ) for x in example_files]
                 examples = pool.starmap(net.load_example, examples_parameters)
 
         elif io_parameters.example_format == 'TFR':
             if validation_parameters.batch_size == -1 and not examples:
                 logger.info('loading TFR, this may take a while')
                 for example in net.iterator_over_tfdata(
-                        data_parameters.g_size, *dataset_files,\
-                        derivatives=validation_parameters.compute_forces):
+                        tfr_parameters.g_size,
+                        *dataset_files,
+                        derivatives=validation_parameters.compute_forces,
+                        sparse_derivatives=tfr_parameters.sparse_derivatives):
                     examples.append(example)
 
         if not examples:
@@ -409,35 +342,36 @@ def main(parameters):
                          for example in examples]
 
         if validation_parameters.compute_forces:
-            Ef = pool.starmap(_eval_function_forces, parallel_feed)
-            string = '\n'.join([x[0] for x in Ef])
-            string2 = ''.join([x[1] for x in Ef])
+            energy_forces = pool.starmap(_eval_function_forces, parallel_feed)
+            string = '\n'.join([x[0] for x in energy_forces])
+            string2 = ''.join([x[1] for x in energy_forces])
         else:
             string = '\n'.join(pool.starmap(_eval_function, parallel_feed))
 
-        writers[wi].write(string)
-        writers[wi].flush()
+        energy_writers[writer_idx].write(string)
+        energy_writers[writer_idx].flush()
         if validation_parameters.compute_forces:
-            f_writers[wi].write(string2)
-            f_writers[wi].flush()
+            force_writers[writer_idx].write(string2)
+            force_writers[writer_idx].flush()
 
-    [x.close() for x in writers]
+    [x.close() for x in energy_writers]
     if validation_parameters.compute_forces:
-        [x.close() for x in f_writers]
+        [x.close() for x in force_writers]
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--config', type=str, help='configuration filename', required=True)
-    parser.add_argument(
-        '--debug', action='store_true', help='debug flag', required=False)
-    args = parser.parse_args()
+    init_logging()
+    PARSER = argparse.ArgumentParser()
+    PARSER.add_argument('-c',
+                        '--config',
+                        type=str,
+                        help='configuration filename',
+                        required=True)
+    PARSER.add_argument('--debug',
+                        action='store_true',
+                        help='debug flag, not working for now',
+                        required=False)
+    ARGS = PARSER.parse_args()
 
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-
-    parameters = parse_file(args.config)
-    main(parameters)
+    PARAMETERS = parse_file(ARGS.config)
+    main(PARAMETERS)

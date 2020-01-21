@@ -5,6 +5,8 @@ In this tutorial we will walk through the steps necessary to
 convert the data that you have from your simulations into 
 a format suitable for PANNA training and evaluation steps.
 
+**NOTE:** As in the previous tutorial, all commands will assume to be run from the `doc/tutorial` directory.
+
 ### Introduction
 
 We will convert the output of your simulations into input files for PANNA 
@@ -43,7 +45,7 @@ Example json entry: "atoms" : [[1,"C",[0.0, 0.0, 0.0]],[2,"C",[0.25, 0.25, 0.25]
 
 For this purpose we use the tool qexml_parser.py in the `panna/tools` directory:
 ```
-python ../../panna/tools/qexml_parser.py -i path/to/directory/that/holds/qe/outdir -o path/to/write/the/panna/jsons
+python ../../panna/tools/parse_qexml.py -i path/to/directory/that/holds/qe/outdir -o path/to/write/the/panna/jsons
 ```
 This tool looks inside the specified input directory and finds all <prefix>.xml files that are stored in the same level of .save directories.
 Then it creates a json file with the same name of the xml at the position of the output directory.
@@ -57,8 +59,8 @@ For the sake of tutorial we prepared 10 qe data xml files in directory `tutorial
 We will convert these to PANNA example jsons and store them in a directory called `tutorial_data/qe_sims`
 ```
 cd doc/tutorial
-python ../../panna/tools/qe_parser.py -i tutorial_data/qe_xmls -o tutorial_data/qe_sims
-ls 
+python ../../panna/tools/qe_parser.py -i tutorial_data/qe_xmls -o qe_sims
+ls qe_sims
 ```
 Last command should list all the 10 example jsons. Visualize one to see the fields described above.
 The file format is not intended to be human readable but in this simple case you can.
@@ -91,15 +93,15 @@ We now assume that you followed the previous step and
 called `simulations`.
 
 We will now convert the information here to a representation that can be understood by the network,
-which in general can be thought of any input descriptor, but in the case of atomistic simulations this is often
-symmetry functions such as Behler-Parinello G vectors.
+which in general can be any input descriptor, but in the case of atomistic simulations is often a
+symmetry function such as Behler-Parinello G vectors.
 The tool to use for this purpose is `gvect_calculator.py`.
 It needs an input file defining the necessary parameters and it will generate G vectors and write them to files in binary format.
 You can see the input we will use in this tutorial here `input_files/gvect_sample.ini`.
 and below is the explanation of its content:
-**IMPORTANT NOTE:** Internal units of PANNA are eV and Angstrom. Therefore all the information given to code
-will be converted to these units. For example, the json files might use angstroms and eV but the binary G-vector files will
-be stored in Ry and au.
+**IMPORTANT NOTE:** Internal units of PANNA are eV and Angstrom. Therefore all the information given to the code
+will be converted to these units. For example, the json files might use Ry and a.u. but the binary G-vector files will
+be stored in eV and Angstrom.
 ##### [IO_INFORMATION]
 
 * `input_json_dir` -- The directory containing the example `json` files (relative to the directory you run the program from).
@@ -116,6 +118,9 @@ be stored in Ry and au.
 * `species` -- A comma separated list of species to be found in the simulation files. The order given here is important because the it will be kept throughout the training procedure. Also, the symbol used here needs to match exactly the strings in the `json` files.
 
 * `include_derivatives` -- Boolean. If True, derivative of the descriptor with respect to atomic positions of all atoms is also stored. This is necessary to run force prediction calculations. 
+
+* `sparse_derivatives` -- Boolean. If True, only the nonzero elements of the derivative of the descriptor with respect to atomic positions are stored, in a sparse format. This is particularly useful for very large simulations cells, but might be slower for smaller examples.
+
 ##### [PARALLELIZATION]
 
 * `number_of_process` -- Number or processes to spawn in parallel to compute the gvectors.
@@ -152,13 +157,35 @@ To compute the gvector binaries, run the code `gvect_calculator.py` passing the 
 python3 ../../panna/gvect_calculator.py --config input_files/gvect_sample.ini
 ```
 
-This will create a binary file containing the descriptors for each example file, in our case in the `gvectors` folder. 
-It will also create a log file with summary information, and a file called `gvect_already_computed.dat` 
+This will create a binary `.bin` file containing the descriptors for each example file, in our case in the `gvectors` folder. 
+It will also create a file called `gvect_already_computed.dat` 
 containing the names of the files already processed. 
 This way, in case you add new example jsons to your jsons directory, 
 you can run this tool again and it will process only the news ones. 
 This is also helpful in case the job is interrupted and you want to restart the process.
 
+---
+####On the binary format
+We will give here a brief description of the way data is stored in the `.bin` binary files, which might be useful for the creation of other parsing tools.
+The data (where available) is stored in raw binary format in the following order:
+
+* `VERSION` -- The first 4 bytes represent the version of the descriptor (for now only version 0 is recognized) stored as an unsigned little-endian 4-bytes integer.
+* `FLAGS` -- The following 2 bytes represent flags for possible features contained in the example file. At the moment only the last 4 bits are reserved for the following flags: sparse derivatives, per-atom quantities, forces, derivatives. Flags are stored as an unsigned little-endian 2-bytes integer.
+* `NUMBER OF ATOMS` -- The next 4 bytes represent the number of atoms in the example, stored as an unsigned little-endian 4-bytes integer.
+* `DESCRIPTOR SIZE` -- The next 4 bytes represent the size of the descriptor for each atom, stored as an unsigned little-endian 4-bytes integer.
+* `ENERGY` -- The next 4 bytes represent the energy (or other global target quantity) of the example, stored as a little-endian 4-bytes float. [As specified, the unit for energy is eV]
+* `SPECIES` -- The next 4×"number of atoms" bytes represent the species of each atom in the example, stored as a little-endian 4-bytes float. [The order is the same as the `json` file and the species number is referred to the list of species, starting with 0]
+* `DESCRIPTOR` -- The next 4×"number of atoms"×"descriptor size" bytes represent the descriptor for each atom in the example, in the relative order, each number being stored as a little-endian 4-bytes float. More specifically, for BP type descriptors the following ordering is followed:
+    * The whole radial part is written before the angular part
+    * Within each part, all the bins for a species (of second atom) or species pair (of second and third atom) are written consecutively.
+    * For the radial part, the species order follows the list of species
+    * For the angular part, the species of pairs are ordered to always have the first species with the lowest value (for 4 elements the pairs are 00, 01, 02, 03, 11, 12, 13, 22, 23, 33)
+    * For loops on radial and angular bins, the outermost loop is on the radial part, the innermost on the angular, so that successive angular bins are adjecent [for 3 radial bins (r0, r1, r2) and 3 angular bins (a0, a1, a2) we would obtain (r0a0, r0a1, r0a2, r1a0, r1a1, r1a2, r1a0, r1a1, r1a2)]
+* _[IF FLAG derivatives]_ `DERIVATIVES` -- If requested (and indicated by the flag) the next bytes contain the space derivatives of the descriptors. The derivatives are in principle a matrix of size [number of atoms, descriptor size, number of atoms, 3] where elements [i,j,k,l] represents the derivative of the j-th descriptor bin [see above for the ordering] of the i-th atom with respect to a displacement of the k-th atom in direction l [in (x,y,z)]. This matrix can be stored in two forms depending on the sparse derivatives flag:
+    * -_[IF NOT FLAG sparse derivatives]_ The matrix is stored as dense, simply flattened starting from the last index (adjacent elements vary in l) and each element is stored as a little-endian 4-bytes float.
+    * -_[IF FLAG sparse derivatives]_ Only the nonzero elements of the matrix are stored (this is particularly advantageous for systems much larger than the cutoff or with many possible species). In this case, for each atom, a first number represents the number of nonzero values, followed by the list of all nonzero values, and followed by the indices of all elements in the form ((i×descriptor_size)+j, (3×k)+l) [So if had 3 nonzero values for a certain atom we would get the data (3, v0, v1, v2, (i0×g_size)+j0, ((3×k0)+l0), (i1×g_size)+j1, ((3×k1)+l1), (i2×g_size)+j2, ((3×k2)+l2)]. Once more, each element is stored as a little-endian 4-bytes float.
+* _[IF FLAG forces]_ `FORCES` -- If requested (and indicated by the flag) the next 4×"number of atoms"×3 bytes contain the forces over each atom, stored in order (f0x, f0y, f0z, f1x, ...) as little-endian 4-bytes floats.
+* _[IF FLAG per-atom quantities]_ `PER ATOM QUANTITY` -- If requested (and indicated by the flag) the next 4×"number of atoms" bytes contain a local per-atom quantity (such as local energy or charge) stored in atomic order as little-endian 4-bytes floats.
 ---
 
 ### Converting binary input descriptors to tfrecord files
@@ -175,18 +202,41 @@ Here we describe the required sections and keywords:
 * `input_dir` -- The directory containing the binary gvector files (relative to the directory you run the program from).
 * `output_dir` -- The directory where the tfr files will be created.
 * `prefix` -- An optional prefix to add at the beginning of the output files.
+* `elements_per_file` -- How many simulations to store in the same input file, can be kept smaller if we want to split our training/evaluation sets in multiple files of manageable size.
 
 ##### [CONTENT_INFORMATION]
-* `elements_per_file` -- How many simulations to store in the same input file, can be kept smaller if we want to split our training/evaluation sets in multiple files of manageable size.
 * `n_species` -- Number of species used in the creation of the gvectors.
+* `include_derivatives` -- Boolean. If we have calculated descriptor derivatives in the previous step, setting this to True will package them in the tfr. This is necessary to run force prediction calculations. 
+* `sparse_derivatives` -- Boolean. If we have stored the derivatives as sparse in the previous step, this should be set to True to keep the sparse format in the tfr.
 
-Let us pack the gvectors we have generated in the previous step of the tutorial into tfr files:
+Let us pack the gvectors we have generated in the previous step of the tutorial into tfr files (this assumes you have not deleted the `gvectors` folder):
 
 ```
 python3 ../../panna/tfr_packer.py --config ./input_files/tfr_sample.ini
 ```
 
 This will create our input files for training (or evaluation) in the specified folder (`tfr` for this tutorial) as a certain number of `.tfrecord` files, with a progressive identification number.
+
+----
+###Storing derivatives and forces
+As mentioned in each section, if forces are available in the `json` files, it is possible to store them at each step and compute the derivatives of the descriptors so that they can be used for training.
+We summarize here the flags necessary to produce the correct input files:
+
+* Have forces in the original output so that they can be included in the `json`.
+* In `gvect_calculator`, add flag `include_derivatives = True` in the [SYMMETRY_FUNCTION] card.
+* In `tfr_packer.py`, add flag `include_derivatives = True` in the [CONTENT_INFORMATION] card.
+
+One can then proceed with a force training as illustrated in Tutorial 1.
+
+###Storing derivatives and forces -- sparse version
+Storing descriptor derivatives in sparse format can reduce data size and improve training speed, especially for systems where the simulation cell is much larger than the cutoff, or where there are a lot of species.
+To create input data in sparse format, on top of the derivative keys, the following keys have to be included:
+
+* In `gvect_calculator`, add flag `sparse_derivatives = True` in the [SYMMETRY_FUNCTION] card.
+* In `tfr_packer.py`, add flag `sparse_derivatives = True` in the [CONTENT_INFORMATION] card.
+
+The sparse flag will also need to be specified in training, as illustrated in Tutorial 1.
+
 
 ####REFERENCES
 

@@ -11,60 +11,6 @@ import os
 import tensorflow as tf
 
 
-def parse_fn_v1(example,
-                g_size,
-                zeros,
-                n_species,
-                forces=False,
-                energy_rescale=1.0):
-    """Parse TFExample records and perform simple data augmentation.
-
-    Args:
-        example: a batch of example obj
-        g_size: size of the g_vector
-        zeros: array of zero's one value per specie.
-        n_species: number of species
-
-    Return:
-        species_tensor: Sparse Tensor, (n_atoms) value in range(n_species)
-        g_vectors_tensor: Sparse Tensor, (n_atoms, g_size)
-        energy: true energy value corrected with the zeros
-    """
-    # species is a vector of length ?number of atoms? padded to a biggest number
-    # with n_species as value
-    feat = {
-        "energy":
-        tf.FixedLenFeature([], dtype=tf.float32),
-        "species":
-        tf.FixedLenSequenceFeature([],
-                                   dtype=tf.int64,
-                                   allow_missing=True,
-                                   default_value=n_species),
-        "gvects":
-        tf.FixedLenSequenceFeature([g_size],
-                                   dtype=tf.float32,
-                                   allow_missing=True)
-    }
-    if forces:
-        feat["dgvects"] = tf.FixedLenSequenceFeature([],
-                                                     dtype=tf.float32,
-                                                     allow_missing=True)
-        feat["forces"] = tf.FixedLenSequenceFeature([],
-                                                    dtype=tf.float32,
-                                                    allow_missing=True)
-    parsed = tf.parse_example(example, features=feat)
-    # remove the zero bias
-    biases = tf.gather(tf.concat([zeros, [0.0]], axis=0), parsed['species'])
-    energy = parsed['energy'] - tf.reduce_sum(biases, axis=1)
-    energy = energy * energy_rescale
-
-    if forces:
-        return parsed["species"], parsed["gvects"], energy, parsed[
-            "dgvects"], parsed["forces"]
-    else:
-        return parsed["species"], parsed["gvects"], energy
-
-
 def input_iterator(data_dir,
                    batch_size,
                    parse_fn,
@@ -78,7 +24,8 @@ def input_iterator(data_dir,
                    oneshot=None):
     """Construct input iterator.
 
-    Args:
+    Parameters
+    ----------
         data_dir: directory for data, must contain a
                   "train_tf subfolder"
         batch_size: batch size
@@ -93,10 +40,12 @@ def input_iterator(data_dir,
         TODO: construct a double system to handle in_place
               evaluation of accuracy
 
-    Returns:
+    Returns
+    -------
         initializable_iterator, recover input data to feed the model
 
-    Note:
+    Note
+    ----
         * shuffling batch and buffer size multiplier default are
           randomly chosen by me
 

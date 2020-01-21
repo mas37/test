@@ -5,108 +5,111 @@
 # The code is hosted on GitLab at https://gitlab.com/PANNAdevs/panna      #
 # For further information on the license, see the LICENSE.txt file        #
 ###########################################################################
-import re
-import os
 import glob
 import json
-import numpy as np
-import logging
+import os
 import struct
+import logging
 
+import numpy as np
 from tensorflow.python import pywrap_tensorflow
-from .systemscaffold import SystemScaffold
-from .systemscaffold import A2affNetwork
 
-logger = logging.getLogger(__name__).getChild('checkpoint_ops')
+from .scaffold_selector import scaffold_selector
+
+logger = logging.getLogger('panna.neuralnet')
+
+
+def _tf_ckpt_search(seed, obj, reader):
+    """ LOAD the network contained in a scaffold form a tf checkpoint
+
+    Parameters
+    ----------
+        seed: a string to find the name
+        obj: an object that has tf_ckpt_elements, scaffold is ok
+             but this function is recursive so other things can also work
+        reader: a tf reader
+
+    Return
+    ------
+        Nothing, the scaffold get's loaded with the required parameters
+    """
+    seed_extensions, sub_objs = obj.tf_ckpt_elements
+    sub_seeds = []
+
+    for seed_extension in seed_extensions:
+        if seed == '':
+            new_seed = seed_extension
+        else:
+            new_seed = seed + '/' if seed_extension != '' else seed
+            new_seed += seed_extension
+        sub_seeds.append(new_seed)
+
+    if sub_objs:
+        for new_seed, new_obj in zip(sub_seeds, sub_objs):
+            _tf_ckpt_search(new_seed, new_obj, reader)
+    else:
+        tensors = []
+        for new_seed in sub_seeds:
+            logger.debug('loading: %s', new_seed)
+            tensors.append(reader.get_tensor(new_seed))
+        obj.tf_ckpt_elements = tensors
 
 
 class Checkpoint(object):
     """ A wrapper around a TF checkpoint
-    Checkpoint(path_file, species_list, networks_kind=None,
-               networks_metadata=None)
-
     Parameters
     ----------
-        path_file: str
+        ckpt_file: str
             complete path to a checkpoint file eg: a/path/to/model.ckpt-0
-        species_list: list of str
-            atom sequence , this argument can be passed None and atomic
-            species will then not be inferred by name but by position.
-            This is for retro compatibility, if possible pass always an
-            atomic sequence
-            eg: ['H','C','N','O']
-        networks_kind: list of str
-            default is: all network are all to all connected feed forward.
-        networks_metadata: list of dict
+        config_file: str
+            file used to train the network
     """
-
-    def __init__(self,
-                 path_file,
-                 species_list,
-                 species_offsets=None,
-                 networks_kind=None,
-                 networks_metadata=None):
+    def __init__(self, ckpt_file, json_file, name=None):
         super().__init__()
 
-        self._path_file = path_file
-        self._species_list = species_list
-        self._species_offsets = species_offsets
+        self._ckpt_file = ckpt_file
+        logger.debug('ckpt, train json file: %s', json_file)
 
-        self._networks_kind = networks_kind or ['a2ff' for x in species_list]
-        self._networks_metadata = networks_metadata or [{
-            'species': x
-        } for x in species_list]
+        with open(json_file) as file_stream:
+            self._metadata = json.load(file_stream)
 
-        reader = pywrap_tensorflow.NewCheckpointReader(self._path_file)
+        scaffold_type = self._metadata['scaffold_type']
+        self._Scaffold = scaffold_selector(scaffold_type)
+
+        self._name = name if name else ckpt_file
+
+        reader = pywrap_tensorflow.NewCheckpointReader(self._ckpt_file)
         self._reader = reader
 
     @property
     def get_scaffold(self):
-        # scaffold = SystemScaffold(atomic_sequence=self._species_list,
-        #                           zeros=self._species_offsets)
-        scaffold = SystemScaffold()
-        for network_kind in set(self._networks_kind):
-            if network_kind == 'a2ff':
-                Network = A2affNetwork
+        """
+        return
+        ------
+           The encapsulated scaffold filled with the ckpt
+        """
+        for name, shape in self._reader.get_variable_to_shape_map().items():
+            logger.debug('available variables: %s ---- %s', name, str(shape))
 
-            matches = []
-            for layer_name, shape in \
-                self._reader.get_variable_to_shape_map().items():
+        scaffold = self._Scaffold()
+        scaffold.load_panna_metadata(self._metadata)
+        # fill the scaffold
+        _tf_ckpt_search('', scaffold, self._reader)
 
-                for regexp in Network.regexps():
-                    match = re.findall(regexp, layer_name)
-                    if len(match) >= 1:
-                        matches.append((match, shape,
-                                        self._reader.get_tensor(layer_name)))
-            networks = Network.reconstruct_from_regexp(matches,
-                                                       self._networks_metadata)
-
-            for species_idx, network in networks:
-                species = network.name
-                scaffold[str(species)] = network
-                if self._species_offsets:
-                    scaffold[str(species)].offset = self._species_offsets[species_idx]
-        scaffold.sort_atomic_sequence(self._species_list)
         return scaffold
 
     def dump_PANNA_checkpoint_folder(self,
                                      folder='dump_checkpoint',
-                                     dumping_function=np.save,
-                                     dumping_extension='npy',
-                                     extra_data={}):
+                                     extra_data=None):
         """Dump weights and biases of a checkpoint to a directory, also metadata
 
-        Args:
-            dump: where to dump the files
-            dumping_function: the function that will be used to dump the data,
-                              the function must take 2 parameters
-                              (stirng, numpy_array)
-                              and must execute the saving operation.
-            dumping_extension: the extension of the dumped files
+        Parameters
+        ----------
+            folder: where to dump the files
             extra_data: extra dictionary to be added to the json
 
-
-        Return:
+        Return
+        ------
             None
 
         This method create a folder and put inside that folder
@@ -118,49 +121,19 @@ class Checkpoint(object):
             os.makedirs(folder)
 
         scaffold = self.get_scaffold
-        metadata = scaffold.metadata
+        metadata, networks_tensors = scaffold.ckpt_metadata
 
-        # TODO, This for now is here but it must be moved inside the
-        # network class somehow, just the dump operation should be done here
-        metadata['networks_files'] = []
+        for network_files_name, network_tensors in zip(
+                metadata['networks_files'], networks_tensors):
+            for names, tensors in zip(network_files_name, network_tensors):
+                for name, tensor in zip(names, tensors):
+                    np.save(os.path.join(folder, name), tensor)
 
-        for idx_s, species in enumerate(scaffold.atomic_sequence):
-            network_files = []
-            network = scaffold[species]
-            for idx_l, layer in enumerate(network):
-                base_name = 'species_{}_layer_{}/'.format(idx_s, idx_l)
-
-                w_name = base_name + 'weights'
-                b_name = base_name + 'biases'
-                w_size = layer.wb_shape
-                b_size = layer.b_shape
-
-                w_file_name = ('species_{}_layer_{}_weights_'
-                               '{}x{}.{extension}'.format(
-                                   species,
-                                   idx_l,
-                                   *w_size,
-                                   extension=dumping_extension))
-                b_file_name = ('species_{}_layer_{}_biases_'
-                               '{}.{extension}'.format(
-                                   species,
-                                   idx_l,
-                                   *b_size,
-                                   extension=dumping_extension))
-
-                network_files.append((w_file_name, b_file_name))
-
-                dumping_function(
-                    os.path.join(folder, w_file_name), layer.w_value)
-                dumping_function(
-                    os.path.join(folder, b_file_name), layer.b_value)
-
-            metadata['networks_files'].append(network_files)
-
-        metadata.update(extra_data)
-        with open(os.path.join(folder, 'networks_metadata.json'), 'w') as f:
-            json.dump(metadata, f)
-        return None
+        if extra_data:
+            metadata.update(extra_data)
+        with open(os.path.join(folder, 'networks_metadata.json'),
+                  'w') as file_stream:
+            json.dump(metadata, file_stream)
 
     def dump_LAMMPS_checkpoint_folder(self,
                                       folder='network_potential',
@@ -184,7 +157,7 @@ class Checkpoint(object):
             os.makedirs(folder)
 
         scaffold = self.get_scaffold
-        metadata = scaffold.metadata
+        metadata, _dummy = scaffold.ckpt_metadata
 
         with open(os.path.join(folder, filename), 'w') as f:
             f.write("[GVECT_PARAMETERS]\n")
@@ -200,10 +173,17 @@ class Checkpoint(object):
                 activs = []
                 weights = np.array([], dtype=np.float32)
                 for idx_l, layer in enumerate(network):
+                    weights = np.append(weights, layer.w_value.flatten())
+                    if idx_l == len(network._layers)-1:
+                        biase = layer.b_value + network.offset
+                        print('network_offset=',network.offset)
+                        weights = np.append(weights, biase.flatten())
+                    else:
+                        weights = np.append(weights, layer.b_value.flatten())
+
                     sizes.append(layer.b_shape[0])
                     activs.append(layer.activation)
-                    weights = np.append(weights, layer.w_value.flatten())
-                    weights = np.append(weights, layer.b_value.flatten())
+                    #weights = np.append(weights, layer.b_value.flatten())
                 f.write("\n[{}]\n".format(species))
                 f.write("Nlayers = {}\n".format(len(sizes)))
                 f.write("sizes = {}\n".format(",".join(map(str, sizes))))
@@ -223,39 +203,11 @@ class Checkpoint(object):
 
     @property
     def filename(self):
-        return self._path_file.split('/')[-1]
+        return self._ckpt_file.split('/')[-1]
 
     @property
     def step(self):
-        return int(self._path_file.split('model.ckpt-')[1].split('.')[0])
-
-    @property
-    def stats_101(self):
-        """ for each tensor compute basic stats
-
-        return:
-            dict, 1 key for each tensor with a tuple (min, max, var, mean)
-                  as value
-        """
-        res = {}
-        for k, v in self._tensors_value.items():
-            res[k] = (v.min(), v.max(), v.var(), v.mean())
-        return res
-
-    @property
-    def norms_calculator(self):
-        """Calculate the norm 1 and 2 of all the tensors
-
-        Return:
-            a dict {tensor_name:(l1, l2)}
-
-        l1 = sum_i(abs(v_i))
-        l2 = sum_i(v_i**2)/2
-        """
-        n = {}
-        for k, v in self._tensors_value.items():
-            n[k] = (np.sum(np.abs(v)), np.sum(v**2) / 2)
-        return n
+        return int(self._ckpt_file.split('model.ckpt-')[1].split('.')[0])
 
     @classmethod
     def laststep_finder(cls, directory):
@@ -287,7 +239,7 @@ class Checkpoint(object):
                     'file {} failed to be loaded, no parts'.format(ckp))
                 continue
 
-            if len(parts) < int(parts[0].split('-')[4]):
+            if len(parts) < int(parts[0].split('/')[-1].split('-')[4]):
                 logger.info('file {} failed to be loaded, '
                             'not enough parts'.format(ckp))
                 continue

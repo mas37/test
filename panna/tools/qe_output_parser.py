@@ -170,6 +170,8 @@ def main(indir, outdir, addhash, **kvargs):
                     rlx_ind += 1
                     panna_json['rlx_ind'] =  rlx_ind 
                     data_lines = step.split('\n')
+                    positions_found = False
+                    energy_found = False
                     for num, line in enumerate( data_lines ):
                         if 'CELL_PARAMETERS' in line:
                            i=num+1
@@ -183,6 +185,7 @@ def main(indir, outdir, addhash, **kvargs):
                            else :
                               exit(1)  
                         elif 'ATOMIC_POSITIONS' in line:
+                           positions_found=True
                            i=num+1
                            pos_list = [ [ data_lines[i+j].split()[1],
                                           data_lines[i+j].split()[2],
@@ -202,6 +205,7 @@ def main(indir, outdir, addhash, **kvargs):
                                exit(2)
                                
                         elif '!    total energy' in line:
+                           energy_found = True
                            etot = line.split()[4]
                            #print('Total energy for this scf run {}'.format(etot), flush=True)
                         elif 'Forces acting on atoms' in line:
@@ -237,8 +241,9 @@ def main(indir, outdir, addhash, **kvargs):
                        #  panna_json_name = panna_json_name.split('_')[0] + "_"+ str(panna_json['rlx_ind'])
                         panna_json_name = panna_json_name_rand +  "_"+ str(panna_json['rlx_ind'])
                     panna_json['starter_key'] =  starter_key
-                    with open(outdir.rstrip('/')+"/"+panna_json_name+".example",'w') as outfile:
-                        json.dump(panna_json, outfile)
+                    if (positions_found and energy_found):
+                        with open(outdir.rstrip('/')+"/"+panna_json_name+".example",'w') as outfile:
+                            json.dump(panna_json, outfile)
 
 
           

@@ -30,21 +30,31 @@ def _G_radial_mBP_dGvect(rdiff, index, eta_rad, Rs0_rad, Rsst_rad, Rc_rad):
 def _G_angular_mBP_dGvect(rdiff1, rdiff2, costheta, indexR, cosThi, sinThi,
                           eta_ang, Rs0_ang, Rsst_ang, Thetasst, zeta, Rc_ang):
     """
-    Just the function to calculate G_radial element with certain R_s index,
-    plus the factors to compute the derivatives
-    emine: reformatted as zeta is big, not to multiply and divide w big numbers
-    Also, cosine centers are shift by half, differently than mBP reference.
+    The function to calculate G_radial element with certain R_s index,
+    plus the factors to compute the derivatives.
+    Cosine centers are shifted by half, differently than mBP reference.
+    The formula is also corrected with epsilon to fix for the discontinuous derivative
+    See PANNA paper.
     """
+    # introduce this to fix for discontinuous derivatives
+    epscorr = 1.0e-2
+    norm = ((1. + np.sqrt(1. + epscorr * sinThi**2))/2.)**zeta
+    sintheta = np.sqrt(1.0 - costheta**2 + epscorr * sinThi**2)
+
     R_cent = (0.5 * (rdiff1 + rdiff2) - Rs0_ang - indexR * Rsst_ang)
     Gauss = 2.0 * np.exp(-eta_ang * R_cent**2)
-    f_c_th = 0.5 * (
-        1.0 + cosThi * costheta + sinThi * np.sqrt(1.0 - costheta**2))
+
+    # normalized angular part
+    f_c_th = 0.5 * (1.0 + cosThi * costheta + sinThi * sintheta)
     f_c_1 = 0.5 * (1.0 + np.cos(np.pi * rdiff1 / Rc_ang))
     f_c_2 = 0.5 * (1.0 + np.cos(np.pi * rdiff2 / Rc_ang))
-    tmp0 = Gauss * f_c_th**(zeta - 1)
+
+    tmp0 = Gauss * f_c_th**(zeta - 1)/norm
     tmp1 = tmp0 * f_c_1 * f_c_2
-    tmp2 = 0.5 * zeta * tmp1 * (cosThi - sinThi * costheta /
-                                (np.sqrt(1.0 - costheta**2) + 1e-10))
+
+    tmp2 = 0.5 * zeta * tmp1 * (cosThi - sinThi * costheta / sintheta)
+
+    #derivatives of cutoff
     tmp3 = 0.5 * np.pi * tmp0 * f_c_th / Rc_ang
     G = tmp1 * f_c_th
     dG1 = -(eta_ang * R_cent * G + tmp2 * costheta / rdiff1 +
@@ -52,6 +62,7 @@ def _G_angular_mBP_dGvect(rdiff1, rdiff2, costheta, indexR, cosThi, sinThi,
     dG2 = tmp2 / (rdiff1 * rdiff2)
     dG3 = -(eta_ang * R_cent * G + tmp2 * costheta / rdiff2 +
             tmp3 * f_c_1 * np.sin(np.pi * rdiff2 / Rc_ang)) / rdiff2
+
     return (G, dG1, dG2, dG3)
 
 
@@ -244,4 +255,4 @@ def calculate_Gvector_dGvect(key, positions, species, lattice_vectors,
                                         temp_ind + Rsi * ThetasN +
                                         Thi][i] -= (dGdxj + dGdxk) * prefactor
 
-    return (key, Gvector.tolist(), dGvector.tolist())
+    return (key, Gvector, dGvector)
