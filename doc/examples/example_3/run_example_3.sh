@@ -15,7 +15,7 @@ echo ' '
 echo ' done training with activation  ' ${act_funct}
 echo ' '
 
-python3 ../../../../panna_prerelease/panna/evaluate.py --config validation_${act_funct}.ini
+python3 ../../../panna/evaluate.py --config validation_${act_funct}.ini
 
 echo ' done evaluating the network with activation  ' ${act_funct}
 echo 'done!!!'
