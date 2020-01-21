@@ -18,7 +18,7 @@ def train_config(filename, act):
         config.write('data_dir = ./tfr_data/training_set'+'\n')
         config.write('train_dir = ./train_' + act_funct+'\n')
 
-        config.write('log_frequency = 10'+'\n')
+        config.write('log_frequency = 100'+'\n')
         config.write('save_checkpoint_steps = 1000'+'\n')
         config.write('max_ckpt_to_keep = 250000'+'\n')
 
@@ -58,16 +58,12 @@ def evaluate_config(filename, act):
         config.write('train_dir = ./train_' + act_funct+'\n')
         config.write('eval_dir = ./eval_' + act_funct+'\n')
 
-        config.write('[DATA_INFORMATION]'+'\n')
+        config.write('[TFR_STRUCTURE]'+'\n')
         config.write('g_size = 80'+'\n')
-        config.write('atomic_sequence = C'+'\n')
-        # offset in order of the atomic_sequence in eV
-        config.write('zeros =-245.667607369859'+'\n')
-
-        config.write('compute_forces = True'+'\n')
 
         config.write('[VALIDATION_OPTIONS]'+'\n')
-        config.write('single_step = True')
+        config.write('single_step = True'+'\n')
+        config.write('compute_forces = True'+'\n')
     return None
 
 if __name__== '__main__':

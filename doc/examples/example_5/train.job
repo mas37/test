@@ -37,4 +37,6 @@ export KMP_AFFINITY=granularity=fine,verbose,compact,1,0
 export KMP_SETTINGS=1
 # =============================================
 
-srun python3 train.py --config train.ini --list_of_nodes $EXPANDED_NODE_LIST --task_index_variable 'SLURM_NODEID'
+export PYTHONPATH=/path_to_panna/panna
+
+srun python3 $PYTHONPATH/train.py --config train.ini --list_of_nodes $EXPANDED_NODE_LIST --task_index_variable 'SLURM_NODEID'
