@@ -433,7 +433,7 @@ class PannaScaffold():
             self,
             folder,
             *,
-            file_name='networks_metadata.json',
+            file_name='networks_metadata.json'
     ):
         """ set up internal value form a checkpoint
         """
