@@ -49,20 +49,23 @@ public:
   struct parameters{
     int Nspecies;
     // Gvector parameters
-    float eta_rad;
+    float *eta_rad;
     float Rc_rad;
     float Rs0_rad;
     float Rsst_rad;
     int RsN_rad;
-    float eta_ang;
+    float *eta_ang;
     float Rc_ang;
     float Rs0_ang;
     float Rsst_ang;
     int RsN_ang;
-    float zeta;
+    int *zeta;
     int ThetasN;
     std::string* species;
     int gsize;
+    float * Rs_rad;
+    float * Rs_ang;
+    float * Thetas;
 
     // Network parameters
     int *Nlayers;
@@ -71,11 +74,8 @@ public:
 
     // Useful precalculated quantities
     float cutmax;
-    float seta_rad;
-    float twoeta_rad;
-    float seta_ang;
-    int zint;
-    float zeta_half;
+    float *twoeta_rad;
+    float *zeta_half;
     float iRc_rad;
     float iRc_rad_half;
     float iRc_ang;

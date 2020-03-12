@@ -68,10 +68,10 @@ PairPANNA::~PairPANNA()
 // Radial gvect contribution (and derivative part)
 double PairPANNA::Gradial_d(double rdiff, int indr, double *dtmp){
   double cent = rdiff - par.Rsi_rad[indr];
-  double gauss = exp( - par.eta_rad * cent * cent);
+  double gauss = exp( - par.eta_rad[indr] * cent * cent);
   double fc = 0.5 * ( 1.0 + cos(rdiff * par.iRc_rad) );
   *dtmp = ( par.iRc_rad_half * sin(rdiff * par.iRc_rad) +
-         par.twoeta_rad * fc * cent ) * gauss / rdiff;
+         par.twoeta_rad[indr] * fc * cent ) * gauss / rdiff;
   return gauss * fc;
 }
  
@@ -87,17 +87,17 @@ double PairPANNA::Gangular_d(double rdiff1, double rdiff2, double cosijk, int Rs
   double fcrad = 0.5 * ( 1.0 + par.Thi_cos[Thi] * cosijk + par.Thi_sin[Thi] * sinijk );
   double fcij = 0.5 * ( 1.0 + cos(rdiff1 * par.iRc_ang) );
   double fcik = 0.5 * ( 1.0 + cos(rdiff2 * par.iRc_ang) );
-  double mod_norm = pow( 0.5 * (1.0 + sqrt(1.0 + epscorr * pow(par.Thi_sin[Thi], 2) ) ), par.zeta);
-  double fact0 = 2.0 * exp( - par.eta_ang * Rcent * Rcent) * pow(fcrad, par.zeta-1) / mod_norm;
+  double mod_norm = pow( 0.5 * (1.0 + sqrt(1.0 + epscorr * pow(par.Thi_sin[Thi], 2) ) ), par.zeta[Thi]);
+  double fact0 = 2.0 * exp( - par.eta_ang[Rsi] * Rcent * Rcent) * pow(fcrad, par.zeta[Thi]-1) / mod_norm;
   double fact1 = fact0 * fcij * fcik;
-  double fact2 = par.zeta_half * fact1 * ( par.Thi_cos[Thi] - par.Thi_sin[Thi] * cosijk / sinijk );
+  double fact2 = par.zeta_half[Thi] * fact1 * ( par.Thi_cos[Thi] - par.Thi_sin[Thi] * cosijk / sinijk );
   double fact3 = par.iRc_ang_half * fact0 * fcrad;
   double G = fact1 * fcrad;
-  dtmp[0] = -iRij * ( par.eta_ang * Rcent * G 
+  dtmp[0] = -iRij * ( par.eta_ang[Rsi] * Rcent * G 
             + fact2 * cosijk * iRij
             + fact3 * fcik * sin(rdiff1 * par.iRc_ang) );
   dtmp[1] = fact2 * iRij * iRik;
-  dtmp[2] = -iRik * ( par.eta_ang * Rcent * G 
+  dtmp[2] = -iRik * ( par.eta_ang[Rsi] * Rcent * G 
             + fact2 * cosijk * iRik
             + fact3 * fcij * sin(rdiff2 * par.iRc_ang) );
   return G;
@@ -335,7 +335,7 @@ void PairPANNA::compute(int eflag, int vflag)
 // Return 0 if eof, <0 if error, >0 if okay 
 int PairPANNA::get_input_line(std::ifstream* file, std::string* key, std::string* value){
   std::string line;
-  int parsed = 0;
+  int parsed = 0; int vc = 1;
   while(!parsed){
     std::getline(*file,line);
     // Exit on EOF
@@ -353,6 +353,8 @@ int PairPANNA::get_input_line(std::ifstream* file, std::string* key, std::string
       *value = line.substr(1,line.length()-2);
       return 1;
     }
+    // Check if we have version information:
+    if(line.at(0)=='!') { vc=0 ;}
     // Look for equal sign
     std::string eq = "=";
     size_t eqpos = line.find(eq);
@@ -360,14 +362,9 @@ int PairPANNA::get_input_line(std::ifstream* file, std::string* key, std::string
     if(eqpos != std::string::npos){
       *key = line.substr(0,eqpos);
       *value = line.substr(eqpos+1,line.length()-1);
+      if (vc == 0) { vc = 1 ; return 3; }
       return 2;
     }
-    // Parse full line
-    else{
-      *value = line;
-      return 3;
-    }
-
     std::cout << line << std::endl;
     parsed = 1;
   }
@@ -376,6 +373,7 @@ int PairPANNA::get_input_line(std::ifstream* file, std::string* key, std::string
 
 int PairPANNA::get_parameters(char* directory, char* filename)
 {
+  //const double panna_pi = 3.14159265358979323846;
   // Parsing the potential parameters
   std::ifstream params_file;
   std::ifstream weights_file;
@@ -388,11 +386,13 @@ int PairPANNA::get_parameters(char* directory, char* filename)
   // Initializing some parameters before reading:
   par.Nspecies = -1;
   // Flags to keep track of set parameters
-  int Npars = 14;
+  int Npars = 17;
   int parset[Npars];
   for(int i=0;i<Npars;i++) parset[i]=0;
   int *spset;
- 
+  std::string version = "v0"; int gversion=0;
+  double tmp_eta_rad; double tmp_eta_ang ; int tmp_zeta ;
+  //
   params_file.open(file_string.c_str());
   // section keeps track of input file sections
   // -1 in the beginning
@@ -405,32 +405,25 @@ int PairPANNA::get_parameters(char* directory, char* filename)
     // Parse line
     if(parseint==1){
       // Gvect param section
-      if(value=="GVECT_PARAMETERS"){
-        section = 0;
-      }
+      if(value=="GVECT_PARAMETERS"){ section = 0; }
       // For now other sections are just species networks
       else {
-        // First time after params: do checks
+        // First time after params are read: do checks
         if(section==0){
-          // Set steps if they were omitted
-          if(parset[5]==0){
-            par.Rsst_rad = (par.Rc_rad - par.Rs0_rad) / par.RsN_rad;
-            parset[5]=1;
-          }
-          if(parset[10]==0){
-            par.Rsst_ang = (par.Rc_ang - par.Rs0_ang) / par.RsN_ang;
-            parset[10]=1;
-          }
+          if (gversion==0){
+            if(parset[5]==0){
+            // Set steps if they were omitted
+            par.Rsst_rad = (par.Rc_rad - par.Rs0_rad) / par.RsN_rad; parset[5]=1;}
+            if(parset[10]==0){
+            par.Rsst_ang = (par.Rc_ang - par.Rs0_ang) / par.RsN_ang; parset[10]=1;}}
+          else if (gversion==1){parset[5]=1 ; parset[10]=1;}
           // Check that all parameters have been set
           for(int p=0;p<Npars;p++){
             if(parset[p]==0){
-              std::cout << "Parameter " << p << " not set!" << std::endl;
-              return -1;
-            }
-          }
+              std::cout << "Parameter " << p << " not set!" << std::endl;  return -1; } }
           // Calculate Gsize
           par.gsize = par.Nspecies * par.RsN_rad + (par.Nspecies*(par.Nspecies+1))/2 * par.RsN_ang * par.ThetasN;
-        }
+        } //section 0 ended
         int match = 0;
         for(int s=0;s<par.Nspecies;s++){
           // If species matches the list, change section
@@ -444,17 +437,17 @@ int PairPANNA::get_parameters(char* directory, char* filename)
           return -2;
         }
       }
-    }
+    }// A header is parsed
     else if(parseint==2){
       // Parse param section
       if(section==0){
+	std::string comma = ",";
         if(key=="Nspecies"){
           par.Nspecies = std::atoi(value.c_str());
           // Small check
           if(par.Nspecies<1){
             std::cout << "Nspecies needs to be >0." << std::endl;
-            return -2;
-          }
+            return -2; }
           parset[0] = 1;
           // Allocate species list
           par.species = new std::string[par.Nspecies];
@@ -467,82 +460,138 @@ int PairPANNA::get_parameters(char* directory, char* filename)
           spset = new int[par.Nspecies];
           for(int s=0;s<par.Nspecies;s++) {
             par.Nlayers[s] = -1;
-            spset[s]=0;
-          }
-        }
+            spset[s]=0; } }
         else if(key=="species"){
-          std::string comma = ",";
+          //std::string comma = ",";
           size_t pos = 0;
           int s = 0;
           // Parse species list
           while ((pos = value.find(comma)) != std::string::npos) {
             if(s>par.Nspecies-2){
               std::cout << "Species list longer than Nspecies." << std::endl;
-              return -2;
-            }
+              return -2; }
             par.species[s] = value.substr(0, pos);
-            value.erase(0, pos+1);
-            s++;
-          }
+            value.erase(0, pos+1);  s++; }
           if(value.length()>0){
-            par.species[s] = value;
-            s++;
-          };
+            par.species[s] = value; s++; };
           if(s<par.Nspecies){
             std::cout << "Species list shorter than Nspecies." << std::endl;
-            return -2;
-          }
-          parset[1] = 1;
-        }
-        else if(key=="eta_rad"){
-          par.eta_rad = std::atof(value.c_str());
-          parset[2] = 1;
-        }
-        else if(key=="Rc_rad"){
-          par.Rc_rad = std::atof(value.c_str());
-          parset[3] = 1;
-        }
-        else if(key=="Rs0_rad"){
-          par.Rs0_rad = std::atof(value.c_str());
-          parset[4] = 1;
-        }
-        else if(key=="Rsst_rad"){
-          par.Rsst_rad = std::atof(value.c_str());
-          parset[5] = 1;
-        }
-        else if(key=="RsN_rad"){
-          par.RsN_rad = std::atoi(value.c_str());
-          parset[6] = 1;
-        }
-        else if(key=="eta_ang"){
-          par.eta_ang = std::atof(value.c_str());
-          parset[7] = 1;
-        }
-        else if(key=="Rc_ang"){
-          par.Rc_ang = std::atof(value.c_str());
-          parset[8] = 1;
-        }
-        else if(key=="Rs0_ang"){
-          par.Rs0_ang = std::atof(value.c_str());
-          parset[9] = 1;
-        }
-        else if(key=="Rsst_ang"){
-          par.Rsst_ang = std::atof(value.c_str());
-          parset[10] = 1;
-        }
-        else if(key=="RsN_ang"){
-          par.RsN_ang = std::atoi(value.c_str());
-          parset[11] = 1;
-        }
-        else if(key=="zeta"){
-          par.zeta = std::atof(value.c_str());
-          parset[12] = 1;
-        }
-        else if(key=="ThetasN"){
-          par.ThetasN = std::atoi(value.c_str());
-          parset[13] = 1;
-        }
-      }
+            return -2; }
+          parset[1] = 1; }
+        // Common features are read.
+        // From here on what will be read depends on the gversion 
+        if(gversion == 0){ // Potentials compatible with OPENKIM
+	  std::cout << "G Version is " << gversion << std::endl;
+          if(key=="eta_rad"){
+            tmp_eta_rad = std::atof(value.c_str()); parset[2] = 0; }
+          else if(key=="Rc_rad"){
+            par.Rc_rad = std::atof(value.c_str()); parset[3] = 1; }
+          else if(key=="Rs0_rad"){
+            par.Rs0_rad = std::atof(value.c_str());  parset[4] = 1; }
+          else if(key=="Rsst_rad"){
+            par.Rsst_rad = std::atof(value.c_str()); parset[5] = 1; }
+          else if(key=="RsN_rad"){
+            par.RsN_rad = std::atoi(value.c_str()); parset[6] = 1; 
+            par.eta_rad = new float[par.RsN_rad]; 
+	    par.twoeta_rad = new float[par.RsN_rad];
+            par.Rs_rad  = new float[par.RsN_rad];
+            for(int i=0;i<par.RsN_rad;i++) par.eta_rad[i]=tmp_eta_rad;
+            for(int i=0;i<par.RsN_rad;i++) par.Rs_rad[i]= par.Rs0_rad + i *(par.Rc_rad - par.Rs0_rad) / par.RsN_rad ; 
+            parset[14]=1; parset[2]=1;}
+          else if(key=="eta_ang"){
+            tmp_eta_ang = std::atof(value.c_str()); parset[7] = 0; }
+          else if(key=="Rc_ang"){
+            par.Rc_ang = std::atof(value.c_str()); parset[8] = 1; }
+          else if(key=="Rs0_ang"){
+            par.Rs0_ang = std::atof(value.c_str()); parset[9] = 1; }
+          else if(key=="Rsst_ang"){
+            par.Rsst_ang = std::atof(value.c_str()); parset[10] = 1; }
+          else if(key=="RsN_ang"){
+            par.RsN_ang = std::atoi(value.c_str()); parset[11] = 1; 
+            par.eta_ang = new float[par.RsN_ang];
+            par.Rs_ang  = new float[par.RsN_ang];
+            for(int i=0;i<par.RsN_ang;i++) par.eta_ang[i]=tmp_eta_ang;
+            for(int i=0;i<par.RsN_ang;i++) par.Rs_ang[i]= par.Rs0_ang + i *(par.Rc_ang - par.Rs0_ang) / par.RsN_ang ; 
+            parset[15]=1; parset[7]=1;}
+          else if(key=="zeta"){
+            tmp_zeta = std::atof(value.c_str()); parset[12] = 0; }
+          else if(key=="ThetasN"){
+            par.ThetasN = std::atoi(value.c_str()); parset[13] = 1; 
+            par.zeta = new int[par.ThetasN];
+	    par.zeta_half = new float[par.ThetasN];
+            par.Thetas = new float[par.ThetasN];
+            for(int i=0;i<par.ThetasN;i++) par.zeta[i]=tmp_zeta; parset[12]=1;
+            for(int i=0;i<par.ThetasN;i++) par.Thetas[i]= (0.5f+ i)*(M_PI/par.ThetasN); parset[16]=1;}  
+        }//gversion = 0
+        else if(gversion ==1 ){
+          //First read allocation sizes
+          if(key=="RsN_rad"){
+            par.RsN_rad = std::atoi(value.c_str());
+            par.eta_rad = new float[par.RsN_rad]; 
+	    par.twoeta_rad = new float[par.RsN_rad]; 
+            par.Rs_rad = new float[par.RsN_rad]; parset[6]=1;}
+          else if(key=="RsN_ang"){
+            par.RsN_ang = std::atoi(value.c_str());
+            par.eta_ang = new float[par.RsN_ang];
+            par.Rs_ang = new float[par.RsN_ang]; parset[11]=1;}
+          else if(key=="ThetasN"){
+            par.ThetasN = std::atoi(value.c_str());
+            par.zeta = new int[par.ThetasN];
+            par.zeta_half = new float[par.ThetasN];
+            par.Thetas = new float[par.ThetasN]; parset[13]=1;}
+          // Then cutoffs
+          else if(key=="Rc_rad"){
+            par.Rc_rad = std::atof(value.c_str()); parset[3] = 1; }
+          else if(key=="Rc_ang"){
+            par.Rc_ang = std::atof(value.c_str()); parset[8] = 1; }
+          // Then param arrays
+          else if(key=="eta_rad"){
+            size_t pos = 0; int s = 0;
+            value=value.substr(1, value.size() - 2); //get rid of [ ]
+            while ((pos = value.find(comma)) != std::string::npos) { 
+              par.eta_rad[s] = std::atof(value.substr(0, pos).c_str());
+              value.erase(0, pos+1);  s++; } 
+            if(value.length()>0){ par.eta_rad[s] = std::atof(value.c_str()); s++; }; parset[2] = 1; }
+          else if(key=="eta_ang") {
+            size_t pos = 0; int s = 0;
+            value=value.substr(1, value.size() - 2); //get rid of [ ]
+            while ((pos = value.find(comma)) != std::string::npos) {
+              par.eta_ang[s] = std::atof(value.substr(0, pos).c_str());
+              value.erase(0, pos+1);  s++; }
+            if(value.length()>0){ par.eta_ang[s] = std::atof(value.c_str()); s++; }; parset[7] = 1; }
+          else if(key=="zeta") {
+            size_t pos = 0; int s = 0;
+            value=value.substr(1, value.size() - 2); //get rid of [ ]
+            while ((pos = value.find(comma)) != std::string::npos) {
+              par.zeta[s] = std::atoi(value.substr(0, pos).c_str());
+              value.erase(0, pos+1);  s++; }
+            if(value.length()>0){ par.zeta[s] = std::atoi(value.c_str()); s++; }; parset[12] = 1; }
+          // Then the bin center arrays
+          else if(key=="Rs_rad"){
+            size_t pos = 0; int s = 0;
+            value=value.substr(1, value.size() - 2); //get rid of [ ]
+            while ((pos = value.find(comma)) != std::string::npos) {
+              par.Rs_rad[s] = std::atof(value.substr(0, pos).c_str());
+              value.erase(0, pos+1);  s++; }
+            if(value.length()>0){ par.Rs_rad[s] = std::atof(value.c_str()); s++; }; parset[14] = 1; 
+            par.Rs0_rad=par.Rs_rad[0];                           parset[4]=1;}
+          else if(key=="Rs_ang") {
+            size_t pos = 0; int s = 0;
+            value=value.substr(1, value.size() - 2); //get rid of [ ]
+            while ((pos = value.find(comma)) != std::string::npos) {
+              par.Rs_ang[s] = std::atof(value.substr(0, pos).c_str());
+              value.erase(0, pos+1);  s++; }
+            if(value.length()>0){ par.Rs_ang[s] = std::atof(value.c_str()); s++; }; parset[15] = 1; 
+            par.Rs0_ang=par.Rs_ang[0];                           parset[9]=1;}
+          else if(key=="Thetas") {
+            size_t pos = 0; int s = 0;
+            value=value.substr(1, value.size() - 2); //get rid of [ ]
+            while ((pos = value.find(comma)) != std::string::npos) {
+              par.Thetas[s] = std::atof(value.substr(0, pos).c_str());
+              value.erase(0, pos+1);  s++; }
+            if(value.length()>0){ par.Thetas[s] = std::atof(value.c_str()); s++; };  parset[16] = 1; }   
+        } //gversion = 1
+      } //Section 0 (Parameter parsing) is finished.
       // Parse species network
       else if(section<par.Nspecies+1){
         int s=section-1;
@@ -680,38 +729,42 @@ int PairPANNA::get_parameters(char* directory, char* filename)
       }
     }
     else if(parseint==3){
-      // No full line should be in the input
-      std::cout << "Unexpected line " << value << std::endl;
-      return -4;
+      // Version information is read:
+      if(key == "!version") { 
+        version = value ; 
+        std::cout << "Network version " << value << std::endl; }
+      else if(key == "!gversion") { 
+        gversion = std::atoi(value.c_str()) ; 
+        std::cout << "Gvector version " << value << std::endl;}
     }
-
     // Get new line
     parseint = get_input_line(&params_file,&key,&value);
   }
   
-  // Derived params
+  // Derived params - for both gvect types done here
   par.cutmax = par.Rc_rad>par.Rc_ang ? par.Rc_rad : par.Rc_ang;
-  par.seta_rad = sqrt(par.eta_rad);
-  par.twoeta_rad = 2.0*par.eta_rad;
-  par.seta_ang = sqrt(par.eta_ang);
-  par.zint = (int) par.zeta;
-  par.zeta_half = 0.5*par.zeta;
+  for(int i=0; i<par.RsN_rad; i++) {
+    par.twoeta_rad[i] = 2.0*par.eta_rad[i];}
+  for(int i=0; i<par.ThetasN; i++) {
+    par.zeta_half[i] = 0.5f*par.zeta[i];}
   par.iRc_rad = M_PI/par.Rc_rad;
   par.iRc_rad_half = 0.5*par.iRc_rad;
   par.iRc_ang = M_PI/par.Rc_ang;
   par.iRc_ang_half = 0.5*par.iRc_ang;
-  par.Rsi_rad = new float[par.RsN_rad];
-  for(int indr=0; indr<par.RsN_rad; indr++) par.Rsi_rad[indr] = par.Rs0_rad + indr * par.Rsst_rad;
-  par.Rsi_ang = new float[par.RsN_ang];
-  for(int indr=0; indr<par.RsN_ang; indr++) par.Rsi_ang[indr] = par.Rs0_ang + indr * par.Rsst_ang;
+  //par.Rsi_rad = new float[par.RsN_rad];
+  //for(int indr=0; indr<par.RsN_rad; indr++) par.Rsi_rad[indr] = par.Rs0_rad + indr * par.Rsst_rad;
+  par.Rsi_rad = par.Rs_rad;
+  //par.Rsi_ang = new float[par.RsN_ang];
+  //for(int indr=0; indr<par.RsN_ang; indr++) par.Rsi_ang[indr] = par.Rs0_ang + indr * par.Rsst_ang;
+  par.Rsi_ang = par.Rs_ang;
   par.Thi_cos = new float[par.ThetasN];
   par.Thi_sin = new float[par.ThetasN];
   for(int indr=0; indr<par.ThetasN; indr++)  {
-    float ti = (indr + 0.5f) * M_PI / par.ThetasN;
+    //float ti = (indr + 0.5f) * M_PI / par.ThetasN;
+    float ti = par.Thetas[indr];
     par.Thi_cos[indr] = cos(ti);
     par.Thi_sin[indr] = sin(ti);
   }
-
   for(int s=0;s<par.Nspecies;s++){
     if(spset[s]!=1){
       std::cout << "Species network undefined for " << par.species[s] << std::endl;
@@ -732,7 +785,6 @@ int PairPANNA::get_parameters(char* directory, char* filename)
                   par.RsN_ang * par.ThetasN;
     }
   }
-
   params_file.close();
   delete[] spset;
   return(0);
@@ -774,12 +826,12 @@ void PairPANNA::coeff(int narg, char **arg)
   }
 
   // We now expect a directory and the parameters file name (inside the directory) with all params
-  if (narg != 2) {
-    error->all(FLERR,"Format of pair_coeff command is\npair_coeff network_directory parameter_file\n");
+  if (narg != 4) {
+    error->all(FLERR,"Format of pair_coeff command is\npair_coeff * *  network_directory parameter_file\n");
   }
 
-  std::cout << "Loading PANNA pair parameters from " << arg[0] << "/" << arg[1] << std::endl;
-  int gpout = get_parameters(arg[0], arg[1]);
+  std::cout << "Loading PANNA pair parameters from " << arg[2] << "/" << arg[3] << std::endl;
+  int gpout = get_parameters(arg[2], arg[3]);
   if(gpout==0){
     std::cout << "Network loaded!" << std::endl;
   }
