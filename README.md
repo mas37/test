@@ -13,7 +13,7 @@ local atomic environment descriptors and atomic potentials.
 * Wiki : `https://gitlab.com/pannadevs/panna/wikis/home` - WIP
 
     
-####It provides:
+#### It provides:
 
 * an input creation tool (atomistic calculation result -> G-vector )
 * an input packaging tool for quick processing of TensorFlow ( G-vector -> TFData bundle)
@@ -23,7 +23,7 @@ local atomic environment descriptors and atomic potentials.
 * a bundle of sample data for testing[3]
 
 
-####Testing:
+#### Testing:
 
 Simple tests to check functionality can be run with:
 ```
@@ -45,7 +45,7 @@ PANNA potentials can be used in several MD packages via KIM project [4] model dr
 MD_805652781592_000
 
 
-####REFERENCES
+#### REFERENCES
 
     [1] J. Behler and M. Parrinello; Generalized Neural-Network 
     Representation  of  High-Dimensional  Potential-Energy
