@@ -1,7 +1,8 @@
 ## PANNA
 ### Properties from Artificial Neural Network Architectures
 
-### See manuscript at: [arXiv:1907.03055](https://arxiv.org/abs/1907.03055)
+### See publication at: [Comp Phys Comm, 256, 107402 (2020)](https://www.sciencedirect.com/science/article/abs/pii/S0010465520301843)
+### or the pre-review version at: [arXiv:1907.03055](https://arxiv.org/abs/1907.03055)
 
 PANNA is a package to train and validate all-to-all connected network models for BP[1] and modified-BP[2] type
 local atomic environment descriptors and atomic potentials.
